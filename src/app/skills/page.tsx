@@ -5,7 +5,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { supabase } from "@/lib/supabase"
+import { supabase, isSupabaseConfigured } from "@/lib/supabase"
+import { SetupRequired } from "@/components/setup-required"
 import type { Skill } from "@/lib/supabase-types"
 import { Plus, Zap } from "lucide-react"
 
@@ -15,6 +16,11 @@ export default function SkillsPage() {
 
   useEffect(() => {
     async function fetchSkills() {
+      if (!supabase) {
+        setLoading(false)
+        return
+      }
+      
       try {
         const { data, error } = await supabase
           .from("skills")
@@ -32,6 +38,10 @@ export default function SkillsPage() {
 
     fetchSkills()
   }, [])
+
+  if (!isSupabaseConfigured) {
+    return <SetupRequired />
+  }
 
   return (
     <div className="p-6 space-y-6">

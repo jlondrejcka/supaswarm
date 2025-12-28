@@ -5,7 +5,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { supabase } from "@/lib/supabase"
+import { supabase, isSupabaseConfigured } from "@/lib/supabase"
+import { SetupRequired } from "@/components/setup-required"
 import type { Tool, ToolType } from "@/lib/supabase-types"
 import { Plus, Wrench, Globe, Server, Database } from "lucide-react"
 
@@ -29,6 +30,11 @@ export default function ToolsPage() {
 
   useEffect(() => {
     async function fetchTools() {
+      if (!supabase) {
+        setLoading(false)
+        return
+      }
+      
       try {
         const { data, error } = await supabase
           .from("tools")
@@ -46,6 +52,10 @@ export default function ToolsPage() {
 
     fetchTools()
   }, [])
+
+  if (!isSupabaseConfigured) {
+    return <SetupRequired />
+  }
 
   return (
     <div className="p-6 space-y-6">

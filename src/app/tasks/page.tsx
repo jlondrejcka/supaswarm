@@ -1,11 +1,12 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { supabase } from "@/lib/supabase"
+import { supabase, isSupabaseConfigured } from "@/lib/supabase"
+import { SetupRequired } from "@/components/setup-required"
 import type { Task, TaskStatus } from "@/lib/supabase-types"
 import { Plus, RefreshCw, ChevronRight } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
@@ -20,6 +21,11 @@ export default function TasksPage() {
   }, [])
 
   async function fetchTasks() {
+    if (!supabase) {
+      setLoading(false)
+      return
+    }
+    
     setLoading(true)
     try {
       const { data, error } = await supabase
@@ -34,6 +40,10 @@ export default function TasksPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  if (!isSupabaseConfigured) {
+    return <SetupRequired />
   }
 
   const filteredTasks = filter === "all" 

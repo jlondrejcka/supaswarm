@@ -5,7 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { supabase } from "@/lib/supabase"
+import { supabase, isSupabaseConfigured } from "@/lib/supabase"
+import { SetupRequired } from "@/components/setup-required"
 import type { HumanReview, Task } from "@/lib/supabase-types"
 import { CheckCircle, XCircle, Clock, Users } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
@@ -21,6 +22,11 @@ export default function ReviewsPage() {
 
   useEffect(() => {
     async function fetchData() {
+      if (!supabase) {
+        setLoading(false)
+        return
+      }
+      
       try {
         const [{ data: reviewsData }, { data: tasksData }] = await Promise.all([
           supabase
@@ -45,6 +51,10 @@ export default function ReviewsPage() {
 
     fetchData()
   }, [])
+
+  if (!isSupabaseConfigured) {
+    return <SetupRequired />
+  }
 
   return (
     <div className="p-6 space-y-6">

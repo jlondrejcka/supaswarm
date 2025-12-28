@@ -3,9 +3,10 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Bot, ListTodo, Wrench, Zap, AlertCircle, CheckCircle, Clock, Activity } from "lucide-react"
 import { useEffect, useState } from "react"
-import { supabase } from "@/lib/supabase"
+import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import type { Task, Agent, Tool, Skill } from "@/lib/supabase-types"
 import { Skeleton } from "@/components/ui/skeleton"
+import { SetupRequired } from "@/components/setup-required"
 
 interface Stats {
   totalTasks: number
@@ -25,6 +26,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     async function fetchData() {
+      if (!supabase) {
+        setLoading(false)
+        return
+      }
+      
       try {
         const [
           { data: tasks },
@@ -64,6 +70,10 @@ export default function Dashboard() {
 
     fetchData()
   }, [])
+
+  if (!isSupabaseConfigured) {
+    return <SetupRequired />
+  }
 
   if (loading) {
     return (

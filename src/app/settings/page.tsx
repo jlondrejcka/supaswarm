@@ -5,9 +5,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { supabase } from "@/lib/supabase"
+import { supabase, isSupabaseConfigured } from "@/lib/supabase"
+import { SetupRequired } from "@/components/setup-required"
 import type { LLMProvider } from "@/lib/supabase-types"
-import { Settings, Key, Check, X } from "lucide-react"
+import { Settings, Key, Check } from "lucide-react"
 
 export default function SettingsPage() {
   const [providers, setProviders] = useState<LLMProvider[]>([])
@@ -15,6 +16,11 @@ export default function SettingsPage() {
 
   useEffect(() => {
     async function fetchProviders() {
+      if (!supabase) {
+        setLoading(false)
+        return
+      }
+      
       try {
         const { data, error } = await supabase
           .from("llm_providers")
@@ -32,6 +38,10 @@ export default function SettingsPage() {
 
     fetchProviders()
   }, [])
+
+  if (!isSupabaseConfigured) {
+    return <SetupRequired />
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -112,14 +122,14 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="flex items-center justify-between p-3 rounded-md border">
+            <div className="flex items-center justify-between gap-4 p-3 rounded-md border flex-wrap">
               <div>
                 <p className="font-medium">Supabase Project</p>
                 <p className="text-sm text-muted-foreground font-mono">bgqxccmdcpegvbuxmnrf</p>
               </div>
               <Badge variant="outline">Connected</Badge>
             </div>
-            <div className="flex items-center justify-between p-3 rounded-md border">
+            <div className="flex items-center justify-between gap-4 p-3 rounded-md border flex-wrap">
               <div>
                 <p className="font-medium">Real-time Updates</p>
                 <p className="text-sm text-muted-foreground">Subscribe to task and agent changes</p>

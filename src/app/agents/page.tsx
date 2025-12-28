@@ -5,7 +5,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { supabase } from "@/lib/supabase"
+import { supabase, isSupabaseConfigured } from "@/lib/supabase"
+import { SetupRequired } from "@/components/setup-required"
 import type { Agent } from "@/lib/supabase-types"
 import { Plus, Bot, Settings2 } from "lucide-react"
 
@@ -15,6 +16,11 @@ export default function AgentsPage() {
 
   useEffect(() => {
     async function fetchAgents() {
+      if (!supabase) {
+        setLoading(false)
+        return
+      }
+      
       try {
         const { data, error } = await supabase
           .from("agents")
@@ -32,6 +38,10 @@ export default function AgentsPage() {
 
     fetchAgents()
   }, [])
+
+  if (!isSupabaseConfigured) {
+    return <SetupRequired />
+  }
 
   return (
     <div className="p-6 space-y-6">
