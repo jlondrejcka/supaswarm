@@ -5,39 +5,108 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { LLMProvider } from "@/lib/supabase-types"
-import { Settings, Key, Check } from "lucide-react"
+import { Settings, Key, Check, Save } from "lucide-react"
 
 export default function SettingsPage() {
   const [providers, setProviders] = useState<LLMProvider[]>([])
   const [loading, setLoading] = useState(true)
+  const [selectedProvider, setSelectedProvider] = useState<LLMProvider | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [formData, setFormData] = useState({
+    display_name: "",
+    default_model: "",
+    base_url: "",
+  })
 
   useEffect(() => {
-    async function fetchProviders() {
-      if (!supabase) {
-        setLoading(false)
-        return
-      }
-      
-      try {
-        const { data, error } = await supabase
-          .from("llm_providers")
-          .select("*")
-          .order("display_name")
-
-        if (error) throw error
-        setProviders(data || [])
-      } catch (error) {
-        console.error("Failed to fetch providers:", error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
     fetchProviders()
   }, [])
+
+  async function fetchProviders() {
+    if (!supabase) {
+      setLoading(false)
+      return
+    }
+    
+    try {
+      const { data, error } = await supabase
+        .from("llm_providers")
+        .select("*")
+        .order("display_name")
+
+      if (error) throw error
+      setProviders(data || [])
+    } catch (error) {
+      console.error("Failed to fetch providers:", error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function openConfigDialog(provider: LLMProvider) {
+    setSelectedProvider(provider)
+    setFormData({
+      display_name: provider.display_name,
+      default_model: provider.default_model,
+      base_url: provider.base_url || "",
+    })
+    setDialogOpen(true)
+  }
+
+  async function handleSave() {
+    if (!supabase || !selectedProvider) return
+
+    setSaving(true)
+    try {
+      const { error } = await supabase
+        .from("llm_providers")
+        .update({
+          display_name: formData.display_name,
+          default_model: formData.default_model,
+          base_url: formData.base_url || null,
+        })
+        .eq("id", selectedProvider.id)
+
+      if (error) throw error
+
+      await fetchProviders()
+      setDialogOpen(false)
+    } catch (error) {
+      console.error("Failed to update provider:", error)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function toggleActive(provider: LLMProvider) {
+    if (!supabase) return
+
+    try {
+      const { error } = await supabase
+        .from("llm_providers")
+        .update({ is_active: !provider.is_active })
+        .eq("id", provider.id)
+
+      if (error) throw error
+      await fetchProviders()
+    } catch (error) {
+      console.error("Failed to toggle provider:", error)
+    }
+  }
 
   if (!isSupabaseConfigured) {
     return <SetupRequired />
@@ -77,11 +146,16 @@ export default function SettingsPage() {
               {providers.map((provider) => (
                 <div key={provider.id} className="flex items-center gap-4 p-3 rounded-md border">
                   <div className="flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium" data-testid={`text-provider-${provider.id}`}>
                         {provider.display_name}
                       </span>
-                      <Badge variant={provider.is_active ? "default" : "secondary"}>
+                      <Badge 
+                        variant={provider.is_active ? "default" : "secondary"}
+                        className="cursor-pointer"
+                        onClick={() => toggleActive(provider)}
+                        data-testid={`badge-status-${provider.id}`}
+                      >
                         {provider.is_active ? "Active" : "Inactive"}
                       </Badge>
                     </div>
@@ -89,7 +163,7 @@ export default function SettingsPage() {
                       Default model: {provider.default_model}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {provider.requires_api_key ? (
                       <Badge variant="outline" className="gap-1">
                         <Key className="h-3 w-3" />
@@ -101,7 +175,12 @@ export default function SettingsPage() {
                         No Key Needed
                       </Badge>
                     )}
-                    <Button variant="outline" size="sm" data-testid={`button-configure-${provider.id}`}>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => openConfigDialog(provider)}
+                      data-testid={`button-configure-${provider.id}`}
+                    >
                       <Settings className="h-4 w-4" />
                       Configure
                     </Button>
@@ -139,6 +218,57 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Configure {selectedProvider?.display_name}</DialogTitle>
+            <DialogDescription>
+              Update the settings for this LLM provider
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="display_name">Display Name</Label>
+              <Input
+                id="display_name"
+                value={formData.display_name}
+                onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
+                data-testid="input-display-name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="default_model">Default Model</Label>
+              <Input
+                id="default_model"
+                value={formData.default_model}
+                onChange={(e) => setFormData({ ...formData, default_model: e.target.value })}
+                placeholder="e.g., gpt-4, claude-3-opus"
+                data-testid="input-default-model"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="base_url">Base URL</Label>
+              <Input
+                id="base_url"
+                value={formData.base_url}
+                onChange={(e) => setFormData({ ...formData, base_url: e.target.value })}
+                placeholder="https://api.example.com/v1"
+                data-testid="input-base-url"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="button-cancel">
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={saving} data-testid="button-save">
+              <Save className="h-4 w-4" />
+              {saving ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
