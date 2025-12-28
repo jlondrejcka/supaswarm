@@ -18,7 +18,14 @@ import {
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { LLMProvider } from "@/lib/supabase-types"
-import { Settings, Key, Check, Save } from "lucide-react"
+import { Settings, Key, Check, Save, AlertCircle, ExternalLink } from "lucide-react"
+
+const ENV_VAR_NAMES: Record<string, string> = {
+  xai: "XAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  google: "GOOGLE_AI_API_KEY",
+  openai: "OPENAI_API_KEY",
+}
 
 export default function SettingsPage() {
   const [providers, setProviders] = useState<LLMProvider[]>([])
@@ -112,6 +119,8 @@ export default function SettingsPage() {
     return <SetupRequired />
   }
 
+  const envVarName = selectedProvider ? ENV_VAR_NAMES[selectedProvider.name] || `${selectedProvider.name.toUpperCase()}_API_KEY` : ""
+
   return (
     <div className="p-6 space-y-6">
       <div>
@@ -126,7 +135,7 @@ export default function SettingsPage() {
             LLM Providers
           </CardTitle>
           <CardDescription>
-            Configure API keys for AI model providers
+            Configure AI model providers for agent orchestration
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -158,23 +167,18 @@ export default function SettingsPage() {
                       >
                         {provider.is_active ? "Active" : "Inactive"}
                       </Badge>
+                      {provider.has_api_key && (
+                        <Badge variant="outline" className="gap-1 bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">
+                          <Check className="h-3 w-3" />
+                          Key Configured
+                        </Badge>
+                      )}
                     </div>
                     <p className="text-sm text-muted-foreground">
                       Default model: {provider.default_model}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    {provider.requires_api_key ? (
-                      <Badge variant="outline" className="gap-1">
-                        <Key className="h-3 w-3" />
-                        API Key Required
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="gap-1">
-                        <Check className="h-3 w-3" />
-                        No Key Needed
-                      </Badge>
-                    )}
                     <Button 
                       variant="outline" 
                       size="sm" 
@@ -220,7 +224,7 @@ export default function SettingsPage() {
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Configure {selectedProvider?.display_name}</DialogTitle>
             <DialogDescription>
@@ -257,6 +261,26 @@ export default function SettingsPage() {
                 data-testid="input-base-url"
               />
             </div>
+
+            {selectedProvider?.requires_api_key && (
+              <div className="p-3 rounded-md bg-muted space-y-2">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">API Key Required</p>
+                    <p className="text-xs text-muted-foreground">
+                      For security, API keys are stored as environment secrets. Add your key as:
+                    </p>
+                    <code className="text-xs bg-background px-2 py-1 rounded block mt-1">
+                      {envVarName}
+                    </code>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      In Replit, go to Secrets tab and add the key there. For production, use Supabase Vault.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="button-cancel">

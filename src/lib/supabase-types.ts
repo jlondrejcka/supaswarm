@@ -122,6 +122,7 @@ export type Database = {
           is_active: boolean | null
           name: string
           requires_api_key: boolean | null
+          has_api_key: boolean | null
         }
         Insert: {
           base_url?: string | null
@@ -131,6 +132,7 @@ export type Database = {
           is_active?: boolean | null
           name: string
           requires_api_key?: boolean | null
+          has_api_key?: boolean | null
         }
         Update: {
           base_url?: string | null
@@ -140,6 +142,7 @@ export type Database = {
           is_active?: boolean | null
           name?: string
           requires_api_key?: boolean | null
+          has_api_key?: boolean | null
         }
       }
       skills: {
