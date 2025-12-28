@@ -42,3 +42,4 @@ waitForPort = 5000
 
 [userenv.shared]
 VITE_SUPABASE_URL = "https://bgqxccmdcpegvbuxmnrf.supabase.co"
+NEXT_PUBLIC_SUPABASE_URL = "https://bgqxccmdcpegvbuxmnrf.supabase.co"
