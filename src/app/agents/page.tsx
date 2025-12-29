@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
 import {
   Dialog,
   DialogContent,
@@ -32,7 +33,7 @@ import {
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { Agent, LLMProvider, Tool, Skill } from "@/lib/supabase-types"
-import { Plus, Bot, Settings2, Save, Wrench, Zap } from "lucide-react"
+import { Plus, Bot, Settings2, Save, Wrench, Zap, Star } from "lucide-react"
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([])
@@ -52,6 +53,7 @@ export default function AgentsPage() {
     provider_id: "",
     temperature: "0.7",
     max_tokens: "4096",
+    is_default: false,
   })
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
@@ -77,7 +79,7 @@ export default function AgentsPage() {
         { data: agentToolsData },
         { data: agentSkillsData }
       ] = await Promise.all([
-        supabase.from("agents").select("*").order("created_at", { ascending: false }),
+        supabase.from("agents").select("*").order("is_default", { ascending: false }).order("created_at", { ascending: false }),
         supabase.from("llm_providers").select("*").eq("is_active", true),
         supabase.from("tools").select("*").eq("is_active", true),
         supabase.from("skills").select("*").eq("is_active", true),
@@ -121,6 +123,7 @@ export default function AgentsPage() {
       provider_id: "",
       temperature: "0.7",
       max_tokens: "4096",
+      is_default: false,
     })
     setSelectedTools([])
     setSelectedSkills([])
@@ -138,6 +141,7 @@ export default function AgentsPage() {
       provider_id: agent.provider_id || "",
       temperature: String(agent.temperature || 0.7),
       max_tokens: String(agent.max_tokens || 4096),
+      is_default: agent.is_default || false,
     })
     setSelectedTools(agentTools[agent.id] || [])
     setSelectedSkills(agentSkills[agent.id] || [])
@@ -164,6 +168,21 @@ export default function AgentsPage() {
     )
   }
 
+  async function setAsDefault(agentId: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    if (!supabase) return
+    
+    try {
+      await supabase
+        .from("agents")
+        .update({ is_default: true })
+        .eq("id", agentId)
+      await fetchData()
+    } catch (error) {
+      console.error("Failed to set default agent:", error)
+    }
+  }
+
   async function handleSave() {
     if (!supabase) return
 
@@ -179,6 +198,7 @@ export default function AgentsPage() {
         temperature: parseFloat(formData.temperature) || 0.7,
         max_tokens: parseInt(formData.max_tokens) || 4096,
         is_active: true,
+        is_default: formData.is_default,
       }
 
       let agentId: string
@@ -274,7 +294,7 @@ export default function AgentsPage() {
             const toolCount = agentTools[agent.id]?.length || 0
             const skillCount = agentSkills[agent.id]?.length || 0
             return (
-              <Card key={agent.id} className="hover:bg-accent/50 transition-colors cursor-pointer" onClick={() => openEditDialog(agent)}>
+              <Card key={agent.id} className={`hover:bg-accent/50 transition-colors cursor-pointer ${agent.is_default ? 'ring-2 ring-primary' : ''}`} onClick={() => openEditDialog(agent)}>
                 <CardHeader className="pb-2">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -283,9 +303,17 @@ export default function AgentsPage() {
                         {agent.name}
                       </CardTitle>
                     </div>
-                    <Badge variant={agent.is_active ? "default" : "secondary"}>
-                      {agent.is_active ? "Active" : "Inactive"}
-                    </Badge>
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {agent.is_default && (
+                        <Badge className="gap-1 bg-primary">
+                          <Star className="h-3 w-3" />
+                          Default
+                        </Badge>
+                      )}
+                      <Badge variant={agent.is_active ? "default" : "secondary"}>
+                        {agent.is_active ? "Active" : "Inactive"}
+                      </Badge>
+                    </div>
                   </div>
                   <CardDescription className="line-clamp-2">
                     {agent.description || "No description"}
@@ -294,9 +322,17 @@ export default function AgentsPage() {
                 <CardContent>
                   <div className="flex items-center justify-between gap-2 text-sm">
                     <span className="text-muted-foreground font-mono">{agent.slug}</span>
-                    <Button variant="ghost" size="icon" data-testid={`button-settings-${agent.id}`}>
-                      <Settings2 className="h-4 w-4" />
-                    </Button>
+                    {!agent.is_default && (
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={(e) => setAsDefault(agent.id, e)}
+                        data-testid={`button-set-default-${agent.id}`}
+                      >
+                        <Star className="h-4 w-4" />
+                        Set Default
+                      </Button>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 mt-2 flex-wrap">
                     {toolCount > 0 && (
@@ -431,6 +467,19 @@ export default function AgentsPage() {
                   data-testid="input-agent-max-tokens"
                 />
               </div>
+            </div>
+
+            <div className="flex items-center justify-between p-3 rounded-md border">
+              <div className="space-y-0.5">
+                <Label htmlFor="is_default" className="text-sm font-medium cursor-pointer">Default Agent</Label>
+                <p className="text-xs text-muted-foreground">Use this agent for new tasks by default</p>
+              </div>
+              <Switch
+                id="is_default"
+                checked={formData.is_default}
+                onCheckedChange={(checked) => setFormData({ ...formData, is_default: checked })}
+                data-testid="switch-default-agent"
+              />
             </div>
 
             <Accordion type="multiple" className="w-full">
