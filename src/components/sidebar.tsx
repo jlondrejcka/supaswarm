@@ -19,6 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { ThemeToggle } from "@/components/theme-toggle"
 
 const navItems = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -46,7 +47,7 @@ export function useSidebar() {
 }
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(true)
   
   const toggle = () => setCollapsed(!collapsed)
   
@@ -168,7 +169,7 @@ export function Sidebar() {
         
         <Separator className="my-4" />
         
-        <nav className="px-2">
+        <nav className="space-y-1 px-2">
           <NavLink
             href="/settings"
             icon={Settings}
@@ -176,6 +177,28 @@ export function Sidebar() {
             isActive={pathname === "/settings"}
             collapsed={collapsed}
           />
+          <div className={cn(
+            "flex items-center rounded-md px-3 py-2",
+            collapsed && "justify-center px-2"
+          )}>
+            {collapsed ? (
+              <Tooltip delayDuration={0}>
+                <TooltipTrigger asChild>
+                  <div>
+                    <ThemeToggle />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={8}>
+                  Toggle theme
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <div className="flex items-center gap-3 w-full">
+                <ThemeToggle />
+                <span className="text-sm text-sidebar-foreground/70">Theme</span>
+              </div>
+            )}
+          </div>
         </nav>
       </ScrollArea>
     </div>
