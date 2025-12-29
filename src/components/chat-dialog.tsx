@@ -121,7 +121,7 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
       const { data, error } = await supabase
         .from("tasks")
         .select("*")
-        .is("parent_task_id", null)
+        .is("master_task_id", null)
         .order("created_at", { ascending: false })
         .limit(50)
 

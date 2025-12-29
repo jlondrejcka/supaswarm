@@ -258,14 +258,28 @@ export default function TaskDetailPage() {
                   </p>
                 </div>
 
-                {task.parent_task_id && (
+                {task.parent_id && (
                   <>
                     <Separator />
                     <div>
                       <span className="text-muted-foreground">Parent Task</span>
-                      <Link href={`/tasks/${task.parent_task_id}`}>
+                      <Link href={`/tasks/${task.parent_id}`}>
                         <p className="font-mono text-xs text-primary hover:underline">
-                          {task.parent_task_id.slice(0, 8)}...
+                          {task.parent_id.slice(0, 8)}...
+                        </p>
+                      </Link>
+                    </div>
+                  </>
+                )}
+
+                {task.master_task_id && (
+                  <>
+                    <Separator />
+                    <div>
+                      <span className="text-muted-foreground">Master Task</span>
+                      <Link href={`/tasks/${task.master_task_id}`}>
+                        <p className="font-mono text-xs text-primary hover:underline">
+                          {task.master_task_id.slice(0, 8)}...
                         </p>
                       </Link>
                     </div>
