@@ -62,6 +62,25 @@ Preferred communication style: Simple, everyday language.
 - Google AI (GOOGLE_AI_API_KEY)
 - OpenAI (OPENAI_API_KEY)
 
+## Development Requirements
+
+### UI Testing Policy
+**CRITICAL: Always test functionality in the UI before claiming it works.**
+
+When implementing or fixing features:
+1. Deploy/save code changes
+2. Test the feature in the actual UI (via webview or browser)
+3. Check logs and database state to verify success
+4. Only then report success to the user
+
+This applies especially to:
+- Edge Function deployments - verify via actual API calls and check task status
+- Form submissions - test the form actually works
+- Chat/AI features - send a test message and verify response
+- Database operations - query the database to confirm changes
+
+Never assume a fix works without testing it end-to-end.
+
 ### UI Dependencies
 - Radix UI primitives for accessible components
 - Lucide React for icons
