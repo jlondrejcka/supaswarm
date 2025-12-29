@@ -8,13 +8,23 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { Task, TaskStatus } from "@/lib/supabase-types"
-import { Plus, RefreshCw, ChevronRight } from "lucide-react"
-import { formatDistanceToNow } from "date-fns"
+import { Plus, RefreshCw, ChevronRight, X, Clock, Bot, MessageSquare, AlertCircle, CheckCircle2 } from "lucide-react"
+import { formatDistanceToNow, format } from "date-fns"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<TaskStatus | "all">("all")
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
 
   useEffect(() => {
     fetchTasks()
@@ -119,7 +129,12 @@ export default function TasksPage() {
       ) : (
         <div className="space-y-2">
           {filteredTasks.map((task) => (
-            <Card key={task.id} className="hover:bg-accent/50 transition-colors cursor-pointer">
+            <Card 
+              key={task.id} 
+              className="hover:bg-accent/50 transition-colors cursor-pointer"
+              onClick={() => setSelectedTask(task)}
+              data-testid={`card-task-${task.id}`}
+            >
               <CardContent className="p-4">
                 <div className="flex items-center gap-4">
                   <div className="flex-1 min-w-0">
@@ -145,6 +160,154 @@ export default function TasksPage() {
           ))}
         </div>
       )}
+
+      <TaskDetailDialog 
+        task={selectedTask} 
+        open={!!selectedTask} 
+        onOpenChange={(open) => !open && setSelectedTask(null)} 
+      />
     </div>
+  )
+}
+
+interface TaskDetailDialogProps {
+  task: Task | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
+function TaskDetailDialog({ task, open, onOpenChange }: TaskDetailDialogProps) {
+  if (!task) return null
+
+  const input = task.input as { message?: string } | null
+  const output = task.output as { response?: string; error?: string; reasoning_steps?: string[]; model_used?: string; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } } | null
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <MessageSquare className="h-5 w-5" />
+            Task Details
+          </DialogTitle>
+        </DialogHeader>
+        
+        <ScrollArea className="flex-1 pr-4">
+          <div className="space-y-6">
+            <div className="flex items-center gap-4 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">ID:</span>
+                <code className="text-sm bg-muted px-2 py-0.5 rounded" data-testid="text-detail-task-id">{task.id}</code>
+              </div>
+              <StatusBadge status={task.status as TaskStatus} />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-muted-foreground">Agent:</span>
+                <p className="font-medium">{task.agent_slug || "Unassigned"}</p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Created:</span>
+                <p className="font-medium">
+                  {task.created_at && format(new Date(task.created_at), "MMM d, yyyy HH:mm:ss")}
+                </p>
+              </div>
+            </div>
+
+            <Separator />
+
+            <div>
+              <h3 className="font-semibold mb-2 flex items-center gap-2">
+                <MessageSquare className="h-4 w-4" />
+                Input
+              </h3>
+              <Card>
+                <CardContent className="p-3">
+                  <pre className="text-sm whitespace-pre-wrap font-mono" data-testid="text-task-input">
+                    {input?.message || JSON.stringify(task.input, null, 2)}
+                  </pre>
+                </CardContent>
+              </Card>
+            </div>
+
+            {output && (
+              <>
+                <div>
+                  <h3 className="font-semibold mb-2 flex items-center gap-2">
+                    {task.status === 'failed' ? (
+                      <AlertCircle className="h-4 w-4 text-destructive" />
+                    ) : (
+                      <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    )}
+                    Output
+                  </h3>
+                  <Card>
+                    <CardContent className="p-3">
+                      {output.error ? (
+                        <p className="text-sm text-destructive" data-testid="text-task-error">{output.error}</p>
+                      ) : (
+                        <p className="text-sm whitespace-pre-wrap" data-testid="text-task-response">{output.response}</p>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {output.model_used && (
+                  <div className="flex items-center gap-4 text-sm flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Bot className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Model:</span>
+                      <Badge variant="outline">{output.model_used}</Badge>
+                    </div>
+                    {output.usage && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground">Tokens:</span>
+                        <span>{output.usage.total_tokens}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {output.reasoning_steps && output.reasoning_steps.length > 0 && (
+                  <div>
+                    <h3 className="font-semibold mb-2 flex items-center gap-2">
+                      <Clock className="h-4 w-4" />
+                      Reasoning Steps
+                    </h3>
+                    <Card>
+                      <CardContent className="p-3">
+                        <div className="space-y-2">
+                          {output.reasoning_steps.map((step, i) => (
+                            <div key={i} className="text-sm">
+                              <pre className="whitespace-pre-wrap text-muted-foreground font-mono text-xs">{step}</pre>
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
+              </>
+            )}
+
+            {task.logs && (task.logs as string[]).length > 0 && (
+              <div>
+                <h3 className="font-semibold mb-2">Logs</h3>
+                <Card>
+                  <CardContent className="p-3">
+                    <div className="space-y-1 font-mono text-xs">
+                      {(task.logs as string[]).map((log, i) => (
+                        <p key={i} className="text-muted-foreground">{log}</p>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+          </div>
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -50,51 +50,50 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
   useEffect(() => {
     if (!supabase || !open) return
 
-    const pendingTaskIds = messages
-      .filter((m) => m.taskId && m.status && m.status !== 'completed' && m.status !== 'failed')
-      .map((m) => m.taskId!)
-
-    if (pendingTaskIds.length === 0) return
-
     const client = supabase
-    const pollInterval = setInterval(async () => {
-      for (const taskId of pendingTaskIds) {
-        const { data: task } = await client
-          .from('tasks')
-          .select('*')
-          .eq('id', taskId)
-          .single()
-
-        if (task && (task.status === 'completed' || task.status === 'failed')) {
-          const output = task.output as { response?: string; error?: string }
+    
+    const channel = client
+      .channel('task-updates')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'tasks',
+        },
+        (payload) => {
+          const updatedTask = payload.new as Task
+          const output = updatedTask.output as { response?: string; error?: string }
+          
           setMessages((prev) =>
             prev.map((msg) => {
-              if (msg.taskId === task.id) {
-                if (task.status === 'completed' && output?.response) {
+              if (msg.taskId === updatedTask.id) {
+                if (updatedTask.status === 'completed' && output?.response) {
                   return {
                     ...msg,
                     status: 'completed',
                     content: output.response,
                   }
-                } else if (task.status === 'failed') {
+                } else if (updatedTask.status === 'failed') {
                   return {
                     ...msg,
                     status: 'failed',
                     content: output?.error || 'Task failed',
                   }
                 }
+                return { ...msg, status: updatedTask.status }
               }
               return msg
             })
           )
         }
-      }
-    }, 2000)
+      )
+      .subscribe()
 
     return () => {
-      clearInterval(pollInterval)
+      client.removeChannel(channel)
     }
-  }, [open, messages])
+  }, [open])
 
   async function fetchDefaultAgent() {
     if (!supabase) return
