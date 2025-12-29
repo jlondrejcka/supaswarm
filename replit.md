@@ -68,6 +68,16 @@ The `tasks` table uses three IDs to track task relationships:
 - **Subtask navigation**: Use `parent_id` to traverse up one level in the hierarchy
 - **Conversation grouping**: Use `master_task_id` to find all tasks belonging to the same conversation
 
+### Conversation Threading in Chat
+The chat dialog now supports threaded conversations:
+- First message creates a new master task (master_task_id = NULL)
+- Follow-up messages create subtasks with:
+  - `parent_id` = previous task in chain
+  - `master_task_id` = original master task
+- Chat history shows only master tasks
+- Selecting a conversation loads the full thread
+- "New Chat" button appears during active conversations to start fresh
+
 ### LLM Providers (configured via Vault)
 - xAI (XAI_API_KEY)
 - Anthropic (ANTHROPIC_API_KEY)
