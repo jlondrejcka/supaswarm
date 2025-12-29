@@ -561,12 +561,98 @@ Deno.serve(async (req) => {
           tool_name: toolName,
           success: !toolResult.includes("error"),
         });
+
+        // Build tool result message for follow-up LLM call
+        messages.push({
+          role: "assistant",
+          content: "",
+          // @ts-ignore - OpenAI format includes tool_calls on assistant message
+          tool_calls: [{
+            id: toolCall.id,
+            type: "function",
+            function: {
+              name: toolName,
+              arguments: toolCall.function.arguments,
+            },
+          }],
+        } as { role: string; content: string });
+
+        messages.push({
+          role: "tool",
+          content: toolResult,
+          // @ts-ignore - OpenAI format includes tool_call_id
+          tool_call_id: toolCall.id,
+        } as { role: string; content: string });
       }
 
-      // After tool execution, we might need to call LLM again with results
-      // For now, append tool results to the response
-      llmResponse +=
-        "\n\n[Tool execution completed. See task messages for details.]";
+      // Make a follow-up LLM call to synthesize a response from tool results
+      await addTaskMessage("thinking", "Synthesizing response from tool results...");
+
+      try {
+        if (provider.name === "openai" || provider.name === "xai") {
+          const baseUrl = provider.base_url || "https://api.openai.com/v1";
+          const response = await fetch(`${baseUrl}/chat/completions`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model,
+              messages,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Follow-up LLM API error: ${response.status} - ${errorText}`);
+          }
+
+          const data = await response.json();
+          llmResponse = data.choices?.[0]?.message?.content || "";
+        } else if (provider.name === "anthropic") {
+          // For Anthropic, rebuild conversation with tool results
+          const anthropicMessages = [
+            { role: "user", content: userMessage },
+            { role: "assistant", content: [{ type: "tool_use", id: toolCalls[0].id, name: toolCalls[0].function.name, input: JSON.parse(toolCalls[0].function.arguments || "{}") }] },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: toolCalls[0].id, content: messages[messages.length - 1].content }] },
+          ];
+
+          const response = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "x-api-key": apiKey,
+              "Content-Type": "application/json",
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model,
+              max_tokens: 4096,
+              system: agent.system_prompt || undefined,
+              messages: anthropicMessages,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Follow-up Anthropic API error: ${response.status} - ${errorText}`);
+          }
+
+          const data = await response.json();
+          for (const block of data.content || []) {
+            if (block.type === "text") {
+              llmResponse = block.text;
+            }
+          }
+        } else {
+          // Fallback for providers without native tool result handling
+          llmResponse = "Tool execution completed. Results: " + messages[messages.length - 1].content;
+        }
+      } catch (followUpError) {
+        const errorMessage = followUpError instanceof Error ? followUpError.message : String(followUpError);
+        await addTaskMessage("error", `Follow-up LLM call failed: ${errorMessage}`);
+        llmResponse = "Tool executed successfully. Error synthesizing response: " + errorMessage;
+      }
     }
 
     // Log assistant response
