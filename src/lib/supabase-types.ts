@@ -435,3 +435,39 @@ export type AgentSkill = Tables<'agent_skills'>
 export type TaskStatus = 'pending' | 'running' | 'pending_subtask' | 'needs_human_review' | 'completed' | 'failed' | 'cancelled'
 export type ToolType = 'internal' | 'mcp_server' | 'http_api' | 'supabase_rpc'
 export type CredentialType = 'api_key' | 'bearer_token' | 'oauth_refresh_token' | 'none'
+
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
+export type MessageType = 
+  | 'user_message' 
+  | 'assistant_message' 
+  | 'thinking' 
+  | 'tool_call' 
+  | 'tool_result' 
+  | 'skill_load' 
+  | 'subtask_created' 
+  | 'error' 
+  | 'status_change'
+
+export interface TaskMessage {
+  id: string
+  task_id: string
+  parent_message_id: string | null
+  role: MessageRole
+  type: MessageType
+  content: Json
+  metadata: Json
+  sequence_number: number
+  created_at: string | null
+}
+
+export interface TaskMessageInsert {
+  id?: string
+  task_id: string
+  parent_message_id?: string | null
+  role: MessageRole
+  type: MessageType
+  content: Json
+  metadata?: Json
+  sequence_number?: number
+  created_at?: string | null
+}
