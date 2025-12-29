@@ -93,6 +93,24 @@ This applies especially to:
 
 Never assume a fix works without testing it end-to-end.
 
+### Task Messages (Chain of Thought)
+The `task_messages` table stores structured reasoning traces and chain of thought:
+
+**Message Types:**
+- `user_message` - User input
+- `assistant_message` - Agent response
+- `thinking` - Chain of thought/reasoning steps
+- `tool_call` - Tool invocation
+- `tool_result` - Tool response
+- `skill_load` - Skill loaded
+- `subtask_created` - Subtask spawned
+- `error` - Error message
+- `status_change` - Status update
+
+**UI Views:**
+- Task Detail Page (`/tasks/[id]`): Log-style terminal view with timestamps
+- Chat Dialog: Collapsible chevron sections for reasoning steps
+
 ### UI Dependencies
 - Radix UI primitives for accessible components
 - Lucide React for icons

@@ -10,7 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { Task, TaskStatus } from "@/lib/supabase-types"
-import { ArrowLeft, Clock, Bot, MessageSquare, AlertCircle, CheckCircle2, RefreshCw } from "lucide-react"
+import { ArrowLeft, Clock, Bot, MessageSquare, AlertCircle, CheckCircle2, RefreshCw, Terminal } from "lucide-react"
+import { TaskMessageThread } from "@/components/task-message-thread"
 import { format, formatDistanceToNow } from "date-fns"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
@@ -218,6 +219,16 @@ export default function TaskDetailPage() {
                   </div>
                 </>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Terminal className="h-4 w-4" />
+                Message Thread
+              </h3>
+              <TaskMessageThread taskId={taskId} variant="log" />
             </CardContent>
           </Card>
         </div>
