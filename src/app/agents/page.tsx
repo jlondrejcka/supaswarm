@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -22,14 +23,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
-import type { Agent, LLMProvider } from "@/lib/supabase-types"
-import { Plus, Bot, Settings2, Save } from "lucide-react"
+import type { Agent, LLMProvider, Tool, Skill } from "@/lib/supabase-types"
+import { Plus, Bot, Settings2, Save, Wrench, Zap } from "lucide-react"
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [providers, setProviders] = useState<LLMProvider[]>([])
+  const [tools, setTools] = useState<Tool[]>([])
+  const [skills, setSkills] = useState<Skill[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
@@ -44,6 +53,10 @@ export default function AgentsPage() {
     temperature: "0.7",
     max_tokens: "4096",
   })
+  const [selectedTools, setSelectedTools] = useState<string[]>([])
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  const [agentTools, setAgentTools] = useState<Record<string, string[]>>({})
+  const [agentSkills, setAgentSkills] = useState<Record<string, string[]>>({})
 
   useEffect(() => {
     fetchData()
@@ -56,12 +69,40 @@ export default function AgentsPage() {
     }
     
     try {
-      const [{ data: agentsData }, { data: providersData }] = await Promise.all([
+      const [
+        { data: agentsData },
+        { data: providersData },
+        { data: toolsData },
+        { data: skillsData },
+        { data: agentToolsData },
+        { data: agentSkillsData }
+      ] = await Promise.all([
         supabase.from("agents").select("*").order("created_at", { ascending: false }),
-        supabase.from("llm_providers").select("*").eq("is_active", true)
+        supabase.from("llm_providers").select("*").eq("is_active", true),
+        supabase.from("tools").select("*").eq("is_active", true),
+        supabase.from("skills").select("*").eq("is_active", true),
+        supabase.from("agent_tools").select("*"),
+        supabase.from("agent_skills").select("*")
       ])
+      
       setAgents(agentsData || [])
       setProviders(providersData || [])
+      setTools(toolsData || [])
+      setSkills(skillsData || [])
+      
+      const toolsMap: Record<string, string[]> = {}
+      agentToolsData?.forEach((at: { agent_id: string; tool_id: string }) => {
+        if (!toolsMap[at.agent_id]) toolsMap[at.agent_id] = []
+        toolsMap[at.agent_id].push(at.tool_id)
+      })
+      setAgentTools(toolsMap)
+      
+      const skillsMap: Record<string, string[]> = {}
+      agentSkillsData?.forEach((as: { agent_id: string; skill_id: string }) => {
+        if (!skillsMap[as.agent_id]) skillsMap[as.agent_id] = []
+        skillsMap[as.agent_id].push(as.skill_id)
+      })
+      setAgentSkills(skillsMap)
     } catch (error) {
       console.error("Failed to fetch data:", error)
     } finally {
@@ -81,6 +122,8 @@ export default function AgentsPage() {
       temperature: "0.7",
       max_tokens: "4096",
     })
+    setSelectedTools([])
+    setSelectedSkills([])
     setDialogOpen(true)
   }
 
@@ -96,11 +139,29 @@ export default function AgentsPage() {
       temperature: String(agent.temperature || 0.7),
       max_tokens: String(agent.max_tokens || 4096),
     })
+    setSelectedTools(agentTools[agent.id] || [])
+    setSelectedSkills(agentSkills[agent.id] || [])
     setDialogOpen(true)
   }
 
   function generateSlug(name: string) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+  }
+
+  function toggleTool(toolId: string) {
+    setSelectedTools(prev => 
+      prev.includes(toolId) 
+        ? prev.filter(id => id !== toolId)
+        : [...prev, toolId]
+    )
+  }
+
+  function toggleSkill(skillId: string) {
+    setSelectedSkills(prev => 
+      prev.includes(skillId) 
+        ? prev.filter(id => id !== skillId)
+        : [...prev, skillId]
+    )
   }
 
   async function handleSave() {
@@ -120,17 +181,40 @@ export default function AgentsPage() {
         is_active: true,
       }
 
+      let agentId: string
+
       if (editingAgent) {
         const { error } = await supabase
           .from("agents")
           .update(payload)
           .eq("id", editingAgent.id)
         if (error) throw error
+        agentId = editingAgent.id
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("agents")
           .insert(payload)
+          .select()
+          .single()
         if (error) throw error
+        agentId = data.id
+      }
+
+      if (editingAgent) {
+        await supabase.from("agent_tools").delete().eq("agent_id", agentId)
+        await supabase.from("agent_skills").delete().eq("agent_id", agentId)
+      }
+
+      if (selectedTools.length > 0) {
+        await supabase.from("agent_tools").insert(
+          selectedTools.map(tool_id => ({ agent_id: agentId, tool_id }))
+        )
+      }
+
+      if (selectedSkills.length > 0) {
+        await supabase.from("agent_skills").insert(
+          selectedSkills.map(skill_id => ({ agent_id: agentId, skill_id }))
+        )
       }
 
       await fetchData()
@@ -186,39 +270,57 @@ export default function AgentsPage() {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {agents.map((agent) => (
-            <Card key={agent.id} className="hover:bg-accent/50 transition-colors cursor-pointer" onClick={() => openEditDialog(agent)}>
-              <CardHeader className="pb-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Bot className="h-5 w-5 text-primary" />
-                    <CardTitle className="text-base" data-testid={`text-agent-name-${agent.id}`}>
-                      {agent.name}
-                    </CardTitle>
+          {agents.map((agent) => {
+            const toolCount = agentTools[agent.id]?.length || 0
+            const skillCount = agentSkills[agent.id]?.length || 0
+            return (
+              <Card key={agent.id} className="hover:bg-accent/50 transition-colors cursor-pointer" onClick={() => openEditDialog(agent)}>
+                <CardHeader className="pb-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Bot className="h-5 w-5 text-primary" />
+                      <CardTitle className="text-base" data-testid={`text-agent-name-${agent.id}`}>
+                        {agent.name}
+                      </CardTitle>
+                    </div>
+                    <Badge variant={agent.is_active ? "default" : "secondary"}>
+                      {agent.is_active ? "Active" : "Inactive"}
+                    </Badge>
                   </div>
-                  <Badge variant={agent.is_active ? "default" : "secondary"}>
-                    {agent.is_active ? "Active" : "Inactive"}
-                  </Badge>
-                </div>
-                <CardDescription className="line-clamp-2">
-                  {agent.description || "No description"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center justify-between gap-2 text-sm">
-                  <span className="text-muted-foreground font-mono">{agent.slug}</span>
-                  <Button variant="ghost" size="icon" data-testid={`button-settings-${agent.id}`}>
-                    <Settings2 className="h-4 w-4" />
-                  </Button>
-                </div>
-                {agent.model && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Model: {agent.model}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          ))}
+                  <CardDescription className="line-clamp-2">
+                    {agent.description || "No description"}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between gap-2 text-sm">
+                    <span className="text-muted-foreground font-mono">{agent.slug}</span>
+                    <Button variant="ghost" size="icon" data-testid={`button-settings-${agent.id}`}>
+                      <Settings2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                    {toolCount > 0 && (
+                      <Badge variant="outline" className="gap-1">
+                        <Wrench className="h-3 w-3" />
+                        {toolCount} tool{toolCount !== 1 ? "s" : ""}
+                      </Badge>
+                    )}
+                    {skillCount > 0 && (
+                      <Badge variant="outline" className="gap-1">
+                        <Zap className="h-3 w-3" />
+                        {skillCount} skill{skillCount !== 1 ? "s" : ""}
+                      </Badge>
+                    )}
+                  </div>
+                  {agent.model && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Model: {agent.model}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
       )}
 
@@ -330,6 +432,74 @@ export default function AgentsPage() {
                 />
               </div>
             </div>
+
+            <Accordion type="multiple" className="w-full">
+              <AccordionItem value="tools">
+                <AccordionTrigger className="text-sm">
+                  <div className="flex items-center gap-2">
+                    <Wrench className="h-4 w-4" />
+                    Tools ({selectedTools.length} selected)
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  {tools.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No tools available. Create tools first.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {tools.map((tool) => (
+                        <div key={tool.id} className="flex items-center gap-2">
+                          <Checkbox
+                            id={`tool-${tool.id}`}
+                            checked={selectedTools.includes(tool.id)}
+                            onCheckedChange={() => toggleTool(tool.id)}
+                            data-testid={`checkbox-tool-${tool.id}`}
+                          />
+                          <label htmlFor={`tool-${tool.id}`} className="text-sm cursor-pointer flex-1">
+                            {tool.name}
+                            {tool.description && (
+                              <span className="text-muted-foreground ml-1">- {tool.description}</span>
+                            )}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </AccordionContent>
+              </AccordionItem>
+
+              <AccordionItem value="skills">
+                <AccordionTrigger className="text-sm">
+                  <div className="flex items-center gap-2">
+                    <Zap className="h-4 w-4" />
+                    Skills ({selectedSkills.length} selected)
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  {skills.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No skills available. Create skills first.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {skills.map((skill) => (
+                        <div key={skill.id} className="flex items-center gap-2">
+                          <Checkbox
+                            id={`skill-${skill.id}`}
+                            checked={selectedSkills.includes(skill.id)}
+                            onCheckedChange={() => toggleSkill(skill.id)}
+                            data-testid={`checkbox-skill-${skill.id}`}
+                          />
+                          <label htmlFor={`skill-${skill.id}`} className="text-sm cursor-pointer flex-1">
+                            {skill.name}
+                            {skill.description && (
+                              <span className="text-muted-foreground ml-1">- {skill.description}</span>
+                            )}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="button-cancel">

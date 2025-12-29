@@ -695,6 +695,9 @@ video {
 .mb-4 {
   margin-bottom: 1rem;
 }
+.ml-1 {
+  margin-left: 0.25rem;
+}
 .mt-0\.5 {
   margin-top: 0.125rem;
 }
@@ -1026,6 +1029,9 @@ video {
 .border-input {
   border-color: hsl(var(--input));
 }
+.border-primary {
+  border-color: hsl(var(--primary));
+}
 .border-transparent {
   border-color: transparent;
 }
@@ -1172,6 +1178,9 @@ video {
 .pb-2 {
   padding-bottom: 0.5rem;
 }
+.pb-4 {
+  padding-bottom: 1rem;
+}
 .pl-2 {
   padding-left: 0.5rem;
 }
@@ -1180,6 +1189,9 @@ video {
 }
 .pt-0 {
   padding-top: 0px;
+}
+.text-left {
+  text-align: left;
 }
 .text-center {
   text-align: center;
@@ -1239,6 +1251,9 @@ video {
 }
 .text-card-foreground {
   color: hsl(var(--card-foreground));
+}
+.text-current {
+  color: currentColor;
 }
 .text-destructive-foreground {
   color: hsl(var(--destructive-foreground));
@@ -1364,6 +1379,11 @@ video {
 }
 .transition-opacity {
   transition-property: opacity;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+.transition-transform {
+  transition-property: transform;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 150ms;
 }
@@ -1577,8 +1597,42 @@ video {
   transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
+@keyframes accordion-up {
+
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+
+  to {
+    height: 0;
+  }
+}
+
+.data-\[state\=closed\]\:animate-accordion-up[data-state="closed"] {
+  animation: accordion-up 0.2s ease-out;
+}
+
+@keyframes accordion-down {
+
+  from {
+    height: 0;
+  }
+
+  to {
+    height: var(--radix-accordion-content-height);
+  }
+}
+
+.data-\[state\=open\]\:animate-accordion-down[data-state="open"] {
+  animation: accordion-down 0.2s ease-out;
+}
+
 .data-\[state\=active\]\:bg-background[data-state="active"] {
   background-color: hsl(var(--background));
+}
+
+.data-\[state\=checked\]\:bg-primary[data-state="checked"] {
+  background-color: hsl(var(--primary));
 }
 
 .data-\[state\=open\]\:bg-accent[data-state="open"] {
@@ -1587,6 +1641,10 @@ video {
 
 .data-\[state\=active\]\:text-foreground[data-state="active"] {
   color: hsl(var(--foreground));
+}
+
+.data-\[state\=checked\]\:text-primary-foreground[data-state="checked"] {
+  color: hsl(var(--primary-foreground));
 }
 
 .data-\[state\=open\]\:text-muted-foreground[data-state="open"] {
@@ -1808,6 +1866,11 @@ video {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
+}
+
+.\[\&\[data-state\=open\]\>svg\]\:rotate-180[data-state=open]>svg {
+  --tw-rotate: 180deg;
+  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
 .\[\&_svg\]\:pointer-events-none svg {
