@@ -367,6 +367,20 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
         },
       ])
 
+      // Invoke the Edge Function to process the task
+      try {
+        const { error: invokeError } = await supabase.functions.invoke('process-task', {
+          body: { task_id: task.id },
+        })
+        
+        if (invokeError) {
+          console.error('Edge function error:', invokeError)
+        }
+      } catch (edgeFnError) {
+        console.error('Failed to invoke edge function:', edgeFnError)
+      }
+
+      // Fetch task messages after a delay to allow processing
       setTimeout(async () => {
         const taskMsgs = await fetchTaskMessages(task.id)
         if (taskMsgs.length > 0) {
@@ -378,7 +392,7 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
             )
           )
         }
-      }, 1000)
+      }, 2000)
     } catch (error) {
       console.error("Failed to create task:", error)
       setMessages((prev) => [
