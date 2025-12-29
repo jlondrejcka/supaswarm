@@ -18,7 +18,7 @@ import {
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { LLMProvider } from "@/lib/supabase-types"
-import { Settings, Key, Check, Save, Shield, Trash2, Plus, Lock } from "lucide-react"
+import { Settings, Key, Check, Save, Shield, Trash2, Plus, Lock, AlertCircle, ExternalLink } from "lucide-react"
 
 const ENV_VAR_NAMES: Record<string, string> = {
   xai: "XAI_API_KEY",
@@ -26,6 +26,21 @@ const ENV_VAR_NAMES: Record<string, string> = {
   google: "GOOGLE_AI_API_KEY",
   openai: "OPENAI_API_KEY",
 }
+
+const REQUIRED_SECRETS = [
+  {
+    name: "SUPABASE_SERVICE_ROLE_KEY",
+    label: "Supabase Service Role Key",
+    description: "Required for task processing. Find it in Supabase Dashboard > Project Settings > API",
+    helpUrl: "https://supabase.com/dashboard/project/_/settings/api",
+  },
+  {
+    name: "XAI_API_KEY",
+    label: "xAI API Key",
+    description: "For Grok models. Get it from x.ai",
+    helpUrl: "https://x.ai",
+  },
+]
 
 interface VaultSecret {
   secret_name: string
@@ -52,6 +67,9 @@ export default function SettingsPage() {
   const [newSecretData, setNewSecretData] = useState({ name: "", value: "", description: "" })
   const [savingSecret, setSavingSecret] = useState(false)
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error", text: string } | null>(null)
+  
+  const [quickSecretValues, setQuickSecretValues] = useState<Record<string, string>>({})
+  const [savingQuickSecret, setSavingQuickSecret] = useState<string | null>(null)
 
   useEffect(() => {
     fetchProviders()
@@ -121,7 +139,6 @@ export default function SettingsPage() {
     try {
       const envVarName = ENV_VAR_NAMES[selectedProvider.name] || `${selectedProvider.name.toUpperCase()}_API_KEY`
       
-      // Save API key to vault if provided
       if (formData.api_key.trim()) {
         const { error: vaultError } = await supabase.rpc("upsert_vault_secret", {
           secret_name: envVarName,
@@ -131,7 +148,6 @@ export default function SettingsPage() {
         
         if (vaultError) throw vaultError
         
-        // Update has_api_key flag
         await supabase
           .from("llm_providers")
           .update({ has_api_key: true })
@@ -140,7 +156,6 @@ export default function SettingsPage() {
         setStatusMessage({ type: "success", text: `${envVarName} saved to Vault` })
       }
 
-      // Update provider settings
       const { error } = await supabase
         .from("llm_providers")
         .update({
@@ -176,6 +191,32 @@ export default function SettingsPage() {
       await fetchProviders()
     } catch (error) {
       console.error("Failed to toggle provider:", error)
+    }
+  }
+
+  async function handleQuickSaveSecret(secretName: string, description: string) {
+    if (!supabase) return
+    const value = quickSecretValues[secretName]
+    if (!value?.trim()) return
+    
+    setSavingQuickSecret(secretName)
+    try {
+      const { error } = await supabase.rpc("upsert_vault_secret", {
+        secret_name: secretName,
+        secret_value: value.trim(),
+        secret_description: description,
+      })
+      
+      if (error) throw error
+      
+      setStatusMessage({ type: "success", text: `${secretName} saved` })
+      setQuickSecretValues(prev => ({ ...prev, [secretName]: "" }))
+      await fetchVaultSecrets()
+    } catch (error) {
+      console.error("Failed to save secret:", error)
+      setStatusMessage({ type: "error", text: "Failed to save secret" })
+    } finally {
+      setSavingQuickSecret(null)
     }
   }
 
@@ -231,6 +272,10 @@ export default function SettingsPage() {
 
   const envVarName = selectedProvider ? ENV_VAR_NAMES[selectedProvider.name] || `${selectedProvider.name.toUpperCase()}_API_KEY` : ""
   const selectedProviderHasKey = vaultSecrets.some(s => s.secret_name === envVarName)
+  
+  const missingRequiredSecrets = REQUIRED_SECRETS.filter(
+    rs => !vaultSecrets.some(vs => vs.secret_name === rs.name)
+  )
 
   return (
     <div className="p-6 space-y-6">
@@ -245,6 +290,58 @@ export default function SettingsPage() {
           </Badge>
         )}
       </div>
+
+      {missingRequiredSecrets.length > 0 && (
+        <Card className="border-amber-500/50 bg-amber-500/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+              <AlertCircle className="h-5 w-5" />
+              Required Setup
+            </CardTitle>
+            <CardDescription>
+              Add these secrets to enable full functionality
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {missingRequiredSecrets.map((secret) => (
+              <div key={secret.name} className="space-y-2 p-4 rounded-md border bg-background">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <Label className="font-medium">{secret.label}</Label>
+                    <p className="text-sm text-muted-foreground">{secret.description}</p>
+                  </div>
+                  {secret.helpUrl && (
+                    <a 
+                      href={secret.helpUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-sm text-primary flex items-center gap-1"
+                    >
+                      Get key <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    type="password"
+                    placeholder="Paste your key here"
+                    value={quickSecretValues[secret.name] || ""}
+                    onChange={(e) => setQuickSecretValues(prev => ({ ...prev, [secret.name]: e.target.value }))}
+                    data-testid={`input-quick-${secret.name}`}
+                  />
+                  <Button
+                    onClick={() => handleQuickSaveSecret(secret.name, secret.description)}
+                    disabled={!quickSecretValues[secret.name]?.trim() || savingQuickSecret === secret.name}
+                    data-testid={`button-save-${secret.name}`}
+                  >
+                    {savingQuickSecret === secret.name ? "Saving..." : "Save"}
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -501,7 +598,7 @@ export default function SettingsPage() {
                 id="secret_name"
                 value={newSecretData.name}
                 onChange={(e) => setNewSecretData({ ...newSecretData, name: e.target.value })}
-                placeholder="e.g., SUPABASE_SERVICE_ROLE_KEY"
+                placeholder="e.g., MY_API_KEY"
                 data-testid="input-secret-name"
               />
             </div>
