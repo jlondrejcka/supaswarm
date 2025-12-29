@@ -175,16 +175,23 @@ Deno.serve(async (req) => {
     // Fetch LLM provider
     let provider: LLMProvider | null = null;
     if (agent.llm_provider_id) {
-      const { data: providerData } = await supabase
+      const { data: providerData, error: providerError } = await supabase
         .from("llm_providers")
         .select("*")
         .eq("id", agent.llm_provider_id)
         .single();
+      if (providerError) {
+        console.error("Error fetching agent's provider:", providerError);
+        await addTaskMessage("error", `Failed to fetch provider: ${providerError.message}`);
+      }
       provider = providerData;
+    } else {
+      await addTaskMessage("status_change", "Agent has no llm_provider_id set, using fallback");
     }
 
     if (!provider) {
       // Fallback to first active provider
+      await addTaskMessage("status_change", "Looking for fallback provider...");
       const { data: defaultProvider } = await supabase
         .from("llm_providers")
         .select("*")
@@ -212,8 +219,18 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Get API key from Vault
-    const vaultKeyName = `${provider.name.toUpperCase()}_API_KEY`;
+    // Log which provider we're using
+    await addTaskMessage("status_change", `Using LLM provider: ${provider.display_name} (${provider.name})`);
+
+    // Map provider names to their Vault secret names
+    const vaultKeyMapping: Record<string, string> = {
+      xai: "XAI_API_KEY",
+      anthropic: "ANTHROPIC_API_KEY",
+      google: "GOOGLE_AI_API_KEY",
+      google_ai: "GOOGLE_AI_API_KEY",
+      openai: "OPENAI_API_KEY",
+    };
+    const vaultKeyName = vaultKeyMapping[provider.name.toLowerCase()] || `${provider.name.toUpperCase()}_API_KEY`;
     const { data: apiKeyData, error: vaultError } = await supabase.rpc(
       "get_vault_secret",
       { secret_name: vaultKeyName },
