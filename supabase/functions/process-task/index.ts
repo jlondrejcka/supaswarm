@@ -23,7 +23,7 @@ interface Agent {
   name: string;
   slug: string;
   system_prompt: string | null;
-  llm_provider_id: string | null;
+  provider_id: string | null;
   model: string | null;
 }
 
@@ -174,11 +174,11 @@ Deno.serve(async (req) => {
 
     // Fetch LLM provider
     let provider: LLMProvider | null = null;
-    if (agent.llm_provider_id) {
+    if (agent.provider_id) {
       const { data: providerData, error: providerError } = await supabase
         .from("llm_providers")
         .select("*")
-        .eq("id", agent.llm_provider_id)
+        .eq("id", agent.provider_id)
         .single();
       if (providerError) {
         console.error("Error fetching agent's provider:", providerError);
