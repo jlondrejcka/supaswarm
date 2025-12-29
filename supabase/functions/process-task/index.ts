@@ -3,7 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 interface Tool {
@@ -49,7 +50,7 @@ Deno.serve(async (req) => {
 
   try {
     const { task_id } = await req.json();
-    
+
     if (!task_id) {
       throw new Error("task_id is required");
     }
@@ -80,7 +81,7 @@ Deno.serve(async (req) => {
     async function addTaskMessage(
       messageType: string,
       content: string,
-      metadata?: Record<string, unknown>
+      metadata?: Record<string, unknown>,
     ) {
       const { error } = await supabase.from("task_messages").insert({
         task_id,
@@ -125,10 +126,10 @@ Deno.serve(async (req) => {
         .from("tasks")
         .update({ status: "failed", output: { error: "No agent configured" } })
         .eq("id", task_id);
-      return new Response(
-        JSON.stringify({ error: "No agent configured" }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
-      );
+      return new Response(JSON.stringify({ error: "No agent configured" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400,
+      });
     }
 
     await addTaskMessage("status_change", `Using agent: ${agent.name}`);
@@ -144,7 +145,7 @@ Deno.serve(async (req) => {
     }
 
     const toolIds = agentToolsData?.map((at) => at.tool_id) || [];
-    
+
     let tools: Tool[] = [];
     if (toolIds.length > 0) {
       const { data: toolsData, error: toolsError } = await supabase
@@ -165,7 +166,7 @@ Deno.serve(async (req) => {
       await addTaskMessage(
         "status_change",
         `Loaded ${tools.length} tool(s): ${toolNames}`,
-        { tool_ids: toolIds, tool_slugs: tools.map((t) => t.slug) }
+        { tool_ids: toolIds, tool_slugs: tools.map((t) => t.slug) },
       );
     } else {
       await addTaskMessage("status_change", "No tools assigned to this agent");
@@ -197,11 +198,17 @@ Deno.serve(async (req) => {
       await addTaskMessage("error", "No LLM provider configured");
       await supabase
         .from("tasks")
-        .update({ status: "failed", output: { error: "No LLM provider configured" } })
+        .update({
+          status: "failed",
+          output: { error: "No LLM provider configured" },
+        })
         .eq("id", task_id);
       return new Response(
         JSON.stringify({ error: "No LLM provider configured" }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 400,
+        },
       );
     }
 
@@ -209,11 +216,14 @@ Deno.serve(async (req) => {
     const vaultKeyName = `${provider.name.toUpperCase()}_API_KEY`;
     const { data: apiKeyData, error: vaultError } = await supabase.rpc(
       "get_vault_secret",
-      { secret_name: vaultKeyName }
+      { secret_name: vaultKeyName },
     );
 
     if (vaultError || !apiKeyData) {
-      await addTaskMessage("error", `API key not found in Vault: ${vaultKeyName}`);
+      await addTaskMessage(
+        "error",
+        `API key not found in Vault: ${vaultKeyName}`,
+      );
       await supabase
         .from("tasks")
         .update({
@@ -223,61 +233,81 @@ Deno.serve(async (req) => {
         .eq("id", task_id);
       return new Response(
         JSON.stringify({ error: `API key not found: ${vaultKeyName}` }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 400,
+        },
       );
     }
 
     const apiKey = apiKeyData;
 
     // Build tool definitions for LLM
-    const toolDefinitions = tools.map((tool) => {
-      const config = tool.config as Record<string, unknown>;
-      
-      if (tool.type === "mcp_server") {
-        // MCP server tool - extract function definitions from config
-        const mcpTools = config.tools as Array<{
-          name: string;
-          description: string;
-          inputSchema?: Record<string, unknown>;
-        }> || [];
-        
-        return mcpTools.map((mcpTool) => ({
-          type: "function",
-          function: {
-            name: `${tool.slug}__${mcpTool.name}`,
-            description: mcpTool.description || `Tool from ${tool.name}`,
-            parameters: mcpTool.inputSchema || { type: "object", properties: {} },
+    const toolDefinitions = tools
+      .map((tool) => {
+        const config = tool.config as Record<string, unknown>;
+
+        if (tool.type === "mcp_server") {
+          // MCP server tool - extract function definitions from config
+          const mcpTools =
+            (config.tools as Array<{
+              name: string;
+              description: string;
+              inputSchema?: Record<string, unknown>;
+            }>) || [];
+
+          return mcpTools.map((mcpTool) => ({
+            type: "function",
+            function: {
+              name: `${tool.slug}__${mcpTool.name}`,
+              description: mcpTool.description || `Tool from ${tool.name}`,
+              parameters: mcpTool.inputSchema || {
+                type: "object",
+                properties: {},
+              },
+            },
+          }));
+        }
+
+        // Standard tool definition
+        return [
+          {
+            type: "function",
+            function: {
+              name: tool.slug,
+              description: tool.description || tool.name,
+              parameters: config.parameters || {
+                type: "object",
+                properties: {},
+              },
+            },
           },
-        }));
-      }
-      
-      // Standard tool definition
-      return [{
-        type: "function",
-        function: {
-          name: tool.slug,
-          description: tool.description || tool.name,
-          parameters: config.parameters || { type: "object", properties: {} },
-        },
-      }];
-    }).flat();
+        ];
+      })
+      .flat();
 
     // Log thinking step
-    await addTaskMessage("thinking", "Processing request and preparing to call LLM...");
+    await addTaskMessage(
+      "thinking",
+      "Processing request and preparing to call LLM...",
+    );
 
     // Build messages for LLM
     const messages: Array<{ role: string; content: string }> = [];
-    
+
     if (agent.system_prompt) {
       messages.push({ role: "system", content: agent.system_prompt });
     }
-    
+
     messages.push({ role: "user", content: userMessage });
 
     // Call the LLM provider
     const model = agent.model || provider.default_model;
     let llmResponse: string = "";
-    let toolCalls: Array<{ id: string; function: { name: string; arguments: string } }> = [];
+    let toolCalls: Array<{
+      id: string;
+      function: { name: string; arguments: string };
+    }> = [];
 
     try {
       if (provider.name === "openai" || provider.name === "xai") {
@@ -303,13 +333,12 @@ Deno.serve(async (req) => {
 
         const data = await response.json();
         const choice = data.choices?.[0];
-        
+
         if (choice?.message?.tool_calls) {
           toolCalls = choice.message.tool_calls;
         }
-        
+
         llmResponse = choice?.message?.content || "";
-        
       } else if (provider.name === "anthropic") {
         // Convert tools to Anthropic format
         const anthropicTools = toolDefinitions.map((t) => ({
@@ -336,11 +365,13 @@ Deno.serve(async (req) => {
 
         if (!response.ok) {
           const errorText = await response.text();
-          throw new Error(`Anthropic API error: ${response.status} - ${errorText}`);
+          throw new Error(
+            `Anthropic API error: ${response.status} - ${errorText}`,
+          );
         }
 
         const data = await response.json();
-        
+
         // Extract text and tool use from response
         for (const block of data.content || []) {
           if (block.type === "text") {
@@ -355,7 +386,6 @@ Deno.serve(async (req) => {
             });
           }
         }
-        
       } else if (provider.name === "google_ai") {
         const response = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -368,28 +398,31 @@ Deno.serve(async (req) => {
                 ? { parts: [{ text: agent.system_prompt }] }
                 : undefined,
             }),
-          }
+          },
         );
 
         if (!response.ok) {
           const errorText = await response.text();
-          throw new Error(`Google AI API error: ${response.status} - ${errorText}`);
+          throw new Error(
+            `Google AI API error: ${response.status} - ${errorText}`,
+          );
         }
 
         const data = await response.json();
         llmResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
       }
     } catch (llmError) {
-      const errorMessage = llmError instanceof Error ? llmError.message : String(llmError);
+      const errorMessage =
+        llmError instanceof Error ? llmError.message : String(llmError);
       await addTaskMessage("error", `LLM call failed: ${errorMessage}`);
       await supabase
         .from("tasks")
         .update({ status: "failed", output: { error: errorMessage } })
         .eq("id", task_id);
-      return new Response(
-        JSON.stringify({ error: errorMessage }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 }
-      );
+      return new Response(JSON.stringify({ error: errorMessage }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 500,
+      });
     }
 
     // Process tool calls if any
@@ -397,7 +430,7 @@ Deno.serve(async (req) => {
       for (const toolCall of toolCalls) {
         const toolName = toolCall.function.name;
         const toolArgs = JSON.parse(toolCall.function.arguments || "{}");
-        
+
         await addTaskMessage("tool_call", `Calling tool: ${toolName}`, {
           tool_name: toolName,
           arguments: toolArgs,
@@ -408,9 +441,9 @@ Deno.serve(async (req) => {
         const [toolSlug, mcpFunctionName] = toolName.includes("__")
           ? toolName.split("__")
           : [toolName, null];
-        
+
         const tool = tools.find((t) => t.slug === toolSlug);
-        
+
         if (tool) {
           try {
             if (tool.type === "mcp_server" && mcpFunctionName) {
@@ -419,13 +452,16 @@ Deno.serve(async (req) => {
                 endpoint?: string;
                 transport?: string;
               };
-              
+
               // Get tool credential if needed
               let toolApiKey: string | null = null;
               if (tool.credential_secret_name) {
-                const { data: credData } = await supabase.rpc("get_vault_secret", {
-                  secret_name: tool.credential_secret_name,
-                });
+                const { data: credData } = await supabase.rpc(
+                  "get_vault_secret",
+                  {
+                    secret_name: tool.credential_secret_name,
+                  },
+                );
                 toolApiKey = credData;
               }
 
@@ -435,7 +471,9 @@ Deno.serve(async (req) => {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
-                    ...(toolApiKey ? { Authorization: `Bearer ${toolApiKey}` } : {}),
+                    ...(toolApiKey
+                      ? { Authorization: `Bearer ${toolApiKey}` }
+                      : {}),
                   },
                   body: JSON.stringify({
                     jsonrpc: "2.0",
@@ -447,9 +485,11 @@ Deno.serve(async (req) => {
                     },
                   }),
                 });
-                
+
                 const mcpResult = await mcpResponse.json();
-                toolResult = JSON.stringify(mcpResult.result || mcpResult.error || mcpResult);
+                toolResult = JSON.stringify(
+                  mcpResult.result || mcpResult.error || mcpResult,
+                );
               } else {
                 toolResult = `MCP server endpoint not configured for tool: ${tool.name}`;
               }
@@ -460,7 +500,7 @@ Deno.serve(async (req) => {
                 method?: string;
                 headers?: Record<string, string>;
               };
-              
+
               if (httpConfig.url) {
                 const response = await fetch(httpConfig.url, {
                   method: httpConfig.method || "POST",
@@ -480,7 +520,7 @@ Deno.serve(async (req) => {
               if (rpcConfig.function_name) {
                 const { data: rpcResult, error: rpcError } = await supabase.rpc(
                   rpcConfig.function_name,
-                  toolArgs
+                  toolArgs,
                 );
                 toolResult = rpcError
                   ? `RPC error: ${rpcError.message}`
@@ -508,11 +548,15 @@ Deno.serve(async (req) => {
 
       // After tool execution, we might need to call LLM again with results
       // For now, append tool results to the response
-      llmResponse += "\n\n[Tool execution completed. See task messages for details.]";
+      llmResponse +=
+        "\n\n[Tool execution completed. See task messages for details.]";
     }
 
     // Log assistant response
-    await addTaskMessage("assistant_message", llmResponse || "No response generated");
+    await addTaskMessage(
+      "assistant_message",
+      llmResponse || "No response generated",
+    );
 
     // Update task as completed
     await supabase
@@ -527,14 +571,14 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({ success: true, response: llmResponse }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("Process task error:", message);
-    return new Response(
-      JSON.stringify({ error: message }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 }
-    );
+    return new Response(JSON.stringify({ error: message }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 500,
+    });
   }
 });
