@@ -56,6 +56,18 @@ Preferred communication style: Simple, everyday language.
 - `human_reviews`: Human-in-the-loop review records
 - `llm_providers`: LLM provider configurations
 
+### Task Hierarchy (Three IDs)
+The `tasks` table uses three IDs to track task relationships:
+
+1. **`id`** - The unique record identifier for this task
+2. **`parent_id`** - Reference to the immediate parent task (for subtasks). Used for step-by-step traversal up the task chain.
+3. **`master_task_id`** - Reference to the root/original task that started the conversation. All subtasks in a chain share the same master_task_id. NULL for top-level tasks.
+
+**Usage patterns:**
+- **Chat history**: Query tasks where `master_task_id IS NULL` to get top-level conversations
+- **Subtask navigation**: Use `parent_id` to traverse up one level in the hierarchy
+- **Conversation grouping**: Use `master_task_id` to find all tasks belonging to the same conversation
+
 ### LLM Providers (configured via Vault)
 - xAI (XAI_API_KEY)
 - Anthropic (ANTHROPIC_API_KEY)
