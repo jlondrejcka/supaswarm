@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import type { Task, Agent } from "@/lib/supabase-types"
-import { Bot, Send, Loader2, MessageSquare, History, ArrowLeft, ChevronRight, ChevronDown, Brain, Wrench, Sparkles, GitBranch, AlertCircle, RefreshCw } from "lucide-react"
+import { Bot, Send, Loader2, MessageSquare, History, ArrowLeft, ChevronRight, ChevronDown, Brain, Wrench, Sparkles, GitBranch, AlertCircle, RefreshCw, Plus } from "lucide-react"
 import type { TaskMessage, MessageType } from "@/lib/supabase-types"
 import { formatDistanceToNow } from "date-fns"
 import { StatusBadge } from "@/components/status-badge"
@@ -80,6 +80,11 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
+  
+  const [conversationContext, setConversationContext] = useState<{
+    masterTaskId: string | null
+    lastTaskId: string | null
+  }>({ masterTaskId: null, lastTaskId: null })
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections(prev => {
@@ -231,42 +236,72 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
     fetchChatHistory()
   }
 
+  function handleNewChat() {
+    setMessages([])
+    setConversationContext({ masterTaskId: null, lastTaskId: null })
+    setShowHistory(false)
+  }
+
   async function handleSelectChat(task: Task) {
-    const input = task.input as { message?: string }
-    const output = task.output as { response?: string; error?: string }
+    if (!supabase) return
     
-    const taskMessages = await fetchTaskMessages(task.id)
+    const masterTaskId = task.master_task_id || task.id
     
+    const { data: conversationTasks, error } = await supabase
+      .from("tasks")
+      .select("*")
+      .or(`id.eq.${masterTaskId},master_task_id.eq.${masterTaskId}`)
+      .order("created_at", { ascending: true })
+    
+    if (error) {
+      console.error("Failed to load conversation:", error)
+      return
+    }
+    
+    const allTasks = conversationTasks || [task]
     const newMessages: Message[] = []
+    let lastTaskId: string | null = null
     
-    if (input?.message) {
-      newMessages.push({
-        id: `user-${task.id}`,
-        role: "user",
-        content: input.message,
-      })
+    for (const t of allTasks) {
+      const taskInput = t.input as { message?: string }
+      const taskOutput = t.output as { response?: string; error?: string }
+      const taskMsgs = await fetchTaskMessages(t.id)
+      
+      if (taskInput?.message) {
+        newMessages.push({
+          id: `user-${t.id}`,
+          role: "user",
+          content: taskInput.message,
+        })
+      }
+      
+      if (taskOutput?.response || taskOutput?.error) {
+        newMessages.push({
+          id: `assistant-${t.id}`,
+          role: "assistant",
+          content: taskOutput.response || taskOutput.error || "",
+          status: t.status,
+          taskId: t.id,
+          taskMessages: taskMsgs,
+        })
+      } else if (t.status !== 'completed' && t.status !== 'failed') {
+        newMessages.push({
+          id: `pending-${t.id}`,
+          role: "assistant",
+          content: "Processing...",
+          status: t.status,
+          taskId: t.id,
+          taskMessages: taskMsgs,
+        })
+      }
+      
+      lastTaskId = t.id
     }
     
-    if (output?.response || output?.error) {
-      newMessages.push({
-        id: `assistant-${task.id}`,
-        role: "assistant",
-        content: output.response || output.error || "",
-        status: task.status,
-        taskId: task.id,
-        taskMessages: taskMessages,
-      })
-    } else if (task.status !== 'completed' && task.status !== 'failed') {
-      newMessages.push({
-        id: `pending-${task.id}`,
-        role: "assistant",
-        content: "Processing...",
-        status: task.status,
-        taskId: task.id,
-        taskMessages: taskMessages,
-      })
-    }
-    
+    setConversationContext({
+      masterTaskId: masterTaskId,
+      lastTaskId: lastTaskId,
+    })
     setMessages(newMessages)
     setShowHistory(false)
   }
@@ -286,18 +321,39 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
     ])
 
     try {
+      const isFollowUp = conversationContext.masterTaskId !== null
+      
+      const taskData: Record<string, unknown> = {
+        agent_id: defaultAgent?.id || null,
+        agent_slug: defaultAgent?.slug || null,
+        status: "pending",
+        input: { message: userMessage },
+      }
+      
+      if (isFollowUp) {
+        taskData.parent_id = conversationContext.lastTaskId
+        taskData.master_task_id = conversationContext.masterTaskId
+      }
+      
       const { data: task, error } = await supabase
         .from("tasks")
-        .insert({
-          agent_id: defaultAgent?.id || null,
-          agent_slug: defaultAgent?.slug || null,
-          status: "pending",
-          input: { message: userMessage },
-        })
+        .insert(taskData)
         .select()
         .single()
 
       if (error) throw error
+
+      if (!isFollowUp) {
+        setConversationContext({
+          masterTaskId: task.id,
+          lastTaskId: task.id,
+        })
+      } else {
+        setConversationContext((prev) => ({
+          ...prev,
+          lastTaskId: task.id,
+        }))
+      }
 
       setMessages((prev) => [
         ...prev,
@@ -370,6 +426,17 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
                     <Badge variant="outline" className="gap-1">
                       {defaultAgent.name}
                     </Badge>
+                  )}
+                  {conversationContext.masterTaskId && (
+                    <Button 
+                      variant="ghost" 
+                      size="icon"
+                      onClick={handleNewChat}
+                      data-testid="button-new-chat"
+                      title="New Chat"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
                   )}
                   <Button 
                     variant="ghost" 
