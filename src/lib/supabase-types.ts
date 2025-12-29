@@ -25,6 +25,22 @@ export type Database = {
           priority?: number | null
           skill_id?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: "agent_skills_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_skills_skill_id_fkey"
+            columns: ["skill_id"]
+            isOneToOne: false
+            referencedRelation: "skills"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       agent_tools: {
         Row: {
@@ -39,6 +55,22 @@ export type Database = {
           agent_id?: string
           tool_id?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: "agent_tools_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_tools_tool_id_fkey"
+            columns: ["tool_id"]
+            isOneToOne: false
+            referencedRelation: "tools"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       agents: {
         Row: {
@@ -86,6 +118,15 @@ export type Database = {
           temperature?: number | null
           updated_at?: string | null
         }
+        Relationships: [
+          {
+            foreignKeyName: "agents_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "llm_providers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       human_reviews: {
         Row: {
@@ -115,38 +156,48 @@ export type Database = {
           response?: Json
           task_id?: string | null
         }
+        Relationships: [
+          {
+            foreignKeyName: "human_reviews_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       llm_providers: {
         Row: {
           base_url: string | null
           default_model: string
           display_name: string
+          has_api_key: boolean | null
           id: string
           is_active: boolean | null
           name: string
           requires_api_key: boolean | null
-          has_api_key: boolean | null
         }
         Insert: {
           base_url?: string | null
           default_model: string
           display_name: string
+          has_api_key?: boolean | null
           id?: string
           is_active?: boolean | null
           name: string
           requires_api_key?: boolean | null
-          has_api_key?: boolean | null
         }
         Update: {
           base_url?: string | null
           default_model?: string
           display_name?: string
+          has_api_key?: boolean | null
           id?: string
           is_active?: boolean | null
           name?: string
           requires_api_key?: boolean | null
-          has_api_key?: boolean | null
         }
+        Relationships: []
       }
       skills: {
         Row: {
@@ -185,6 +236,7 @@ export type Database = {
           skill_id?: string
           version?: string | null
         }
+        Relationships: []
       }
       tasks: {
         Row: {
@@ -232,6 +284,29 @@ export type Database = {
           storage_paths?: string[] | null
           updated_at?: string | null
         }
+        Relationships: [
+          {
+            foreignKeyName: "tasks_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_master_task_id_fkey"
+            columns: ["master_task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tools: {
         Row: {
@@ -273,6 +348,7 @@ export type Database = {
           slug?: string
           type?: string
         }
+        Relationships: []
       }
       user_tool_credentials: {
         Row: {
@@ -296,15 +372,48 @@ export type Database = {
           user_id?: string | null
           vault_secret_name?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: "user_tool_credentials_tool_id_fkey"
+            columns: ["tool_id"]
+            isOneToOne: false
+            referencedRelation: "tools"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      check_vault_secret: { Args: { secret_name: string }; Returns: boolean }
+      delete_vault_secret: { Args: { secret_name: string }; Returns: boolean }
+      list_vault_secrets: {
+        Args: Record<string, never>
+        Returns: {
+          created_at: string
+          description: string
+          secret_name: string
+        }[]
+      }
+      pgmq_delete: {
+        Args: { msg_id: number; queue_name: string }
+        Returns: boolean
+      }
+      upsert_vault_secret: {
+        Args: {
+          secret_description?: string
+          secret_name: string
+          secret_value: string
+        }
+        Returns: Json
+      }
     }
     Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
       [_ in never]: never
     }
   }
