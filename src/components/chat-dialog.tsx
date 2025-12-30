@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import type { Task, Agent } from "@/lib/supabase-types"
-import { Bot, Send, Loader2, MessageSquare, History, ArrowLeft, ChevronRight, ChevronDown, Brain, Wrench, Sparkles, GitBranch, AlertCircle, RefreshCw, Plus } from "lucide-react"
+import { Bot, Send, Loader2, MessageSquare, History, ArrowLeft, ChevronRight, ChevronDown, Brain, Wrench, Sparkles, GitBranch, AlertCircle, RefreshCw, Plus, ArrowRightLeft } from "lucide-react"
 import type { TaskMessage, MessageType } from "@/lib/supabase-types"
 import { formatDistanceToNow } from "date-fns"
 import { StatusBadge } from "@/components/status-badge"
@@ -39,6 +39,7 @@ const messageTypeIcons: Record<MessageType, typeof Brain> = {
   subtask_created: GitBranch,
   error: AlertCircle,
   status_change: RefreshCw,
+  handoff: ArrowRightLeft,
 }
 
 const messageTypeColors: Record<MessageType, string> = {
@@ -51,6 +52,7 @@ const messageTypeColors: Record<MessageType, string> = {
   subtask_created: "text-cyan-500",
   error: "text-red-500",
   status_change: "text-muted-foreground",
+  handoff: "text-teal-500",
 }
 
 const messageTypeLabels: Record<MessageType, string> = {
@@ -63,6 +65,7 @@ const messageTypeLabels: Record<MessageType, string> = {
   subtask_created: "Subtask",
   error: "Error",
   status_change: "Status",
+  handoff: "Handoff",
 }
 
 interface ChatDialogProps {
@@ -367,17 +370,37 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
         },
       ])
 
-      // Invoke the Edge Function to process the task
-      try {
-        const { error: invokeError } = await supabase.functions.invoke('process-task', {
-          body: { task_id: task.id },
-        })
-        
-        if (invokeError) {
-          console.error('Edge function error:', invokeError)
+      // Filter: Check task status before invoking edge function
+      // Only invoke if task is still pending (not already processed)
+      const { data: taskCheck, error: checkError } = await supabase
+        .from("tasks")
+        .select("status")
+        .eq("id", task.id)
+        .single()
+
+      if (checkError) {
+        console.error('Failed to check task status:', checkError)
+      }
+
+      // Only invoke if task is still pending
+      if (taskCheck && (taskCheck.status === "pending" || taskCheck.status === "pending_subtask")) {
+        // Invoke the Edge Function to process the task
+        try {
+          const { error: invokeError } = await supabase.functions.invoke('process-task', {
+            body: { task_id: task.id },
+          })
+          
+          if (invokeError) {
+            console.error('Edge function error:', invokeError)
+          }
+        } catch (edgeFnError) {
+          console.error('Failed to invoke edge function:', edgeFnError)
         }
-      } catch (edgeFnError) {
-        console.error('Failed to invoke edge function:', edgeFnError)
+      } else {
+        console.log('Task already processed, skipping edge function invocation', {
+          task_id: task.id,
+          status: taskCheck?.status,
+        })
       }
 
       // Fetch task messages after a delay to allow processing
@@ -604,6 +627,23 @@ function CollapsibleChainOfThought({
         
         if (group.type === 'user_message' || group.type === 'assistant_message') {
           return null
+        }
+        
+        // Handoff messages get special prominent display
+        if (group.type === 'handoff') {
+          return (
+            <div key={sectionId} className="flex items-center gap-2 px-3 py-2 rounded-md bg-teal-500/10 border border-teal-500/20">
+              <ArrowRightLeft className="h-4 w-4 text-teal-500" />
+              {group.messages.map((msg, i) => {
+                const content = msg.content as { text?: string }
+                return (
+                  <span key={i} className="text-sm text-teal-600 dark:text-teal-400 font-medium">
+                    {content.text}
+                  </span>
+                )
+              })}
+            </div>
+          )
         }
 
         return (

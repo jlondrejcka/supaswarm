@@ -1,47 +1,15 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
+import type { Tool, Agent, LLMProvider, LLMToolDefinition, ToolCall, TaskContext } from "./types.ts";
+import { executeMcpTool, getMcpUrl, hasPreDefinedTools } from "./mcp-client.ts";
+import { callLLM, synthesizeResponse, getVaultKeyName, ConversationMessage } from "./llm-providers.ts";
+import { createTaskLogger } from "./task-logger.ts";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-interface Tool {
-  id: string;
-  name: string;
-  slug: string;
-  type: string;
-  config: Record<string, unknown>;
-  description: string | null;
-  is_active: boolean;
-  credential_secret_name: string | null;
-}
-
-interface Agent {
-  id: string;
-  name: string;
-  slug: string;
-  system_prompt: string | null;
-  provider_id: string | null;
-  model: string | null;
-}
-
-interface LLMProvider {
-  id: string;
-  name: string;
-  display_name: string;
-  default_model: string;
-  base_url: string | null;
-}
-
-interface TaskMessage {
-  task_id: string;
-  message_type: string;
-  content: string;
-  metadata?: Record<string, unknown>;
-  sequence_number: number;
-}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -49,17 +17,19 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { task_id } = await req.json();
+    console.log("[MAIN] Process task called", { timestamp: new Date().toISOString() });
 
+    const { task_id } = await req.json();
     if (!task_id) {
       throw new Error("task_id is required");
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
 
-    // Fetch the task
+    // Fetch task
     const { data: task, error: taskError } = await supabase
       .from("tasks")
       .select("*")
@@ -70,390 +40,352 @@ Deno.serve(async (req) => {
       throw new Error(`Task not found: ${taskError?.message}`);
     }
 
-    // Update task status to running
-    await supabase
+    console.log("[MAIN] Task fetched", { task_id, status: task.status });
+
+    // Skip if already in final state
+    if (["completed", "failed", "cancelled"].includes(task.status)) {
+      return new Response(
+        JSON.stringify({ success: true, message: `Task already ${task.status}`, skipped: true }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // Skip if already running
+    if (task.status === "running") {
+      return new Response(
+        JSON.stringify({ success: true, message: "Task already being processed", skipped: true }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // Only process pending tasks
+    if (task.status !== "pending" && task.status !== "pending_subtask") {
+      return new Response(
+        JSON.stringify({ success: false, error: `Task status '${task.status}' not processable` }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 },
+      );
+    }
+
+    // Atomic update to running
+    const { data: updatedTask, error: updateError } = await supabase
       .from("tasks")
       .update({ status: "running" })
-      .eq("id", task_id);
+      .eq("id", task_id)
+      .eq("status", task.status)
+      .select()
+      .single();
 
-    let sequenceNumber = 1;
-
-    async function addTaskMessage(
-      messageType: string,
-      content: string,
-      metadata?: Record<string, unknown>,
-    ) {
-      const { error } = await supabase.from("task_messages").insert({
-        task_id,
-        message_type: messageType,
-        content,
-        metadata,
-        sequence_number: sequenceNumber++,
-      });
-      if (error) {
-        console.error("Failed to add task message:", error);
-      }
+    if (updateError || !updatedTask) {
+      return new Response(
+        JSON.stringify({ success: true, message: "Task status changed", skipped: true }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
-    // Log the user message
-    const userMessage = task.input?.message || "";
-    await addTaskMessage("user_message", userMessage);
+    // Initialize logger
+    const taskStartTime = Date.now();
+    const logger = createTaskLogger(supabase, task_id, taskStartTime);
 
-    // Fetch agent details
+    // Log user message
+    const userMessage = task.input?.message || "";
+    await logger.logUserMessage(userMessage);
+
+    // Fetch conversation history if this task is part of a conversation
+    let conversationHistory: ConversationMessage[] = [];
+    
+    if (task.master_task_id) {
+      // Get all tasks in this conversation (including the master task itself)
+      const { data: conversationTasks } = await supabase
+        .from("tasks")
+        .select("id")
+        .or(`master_task_id.eq.${task.master_task_id},id.eq.${task.master_task_id}`)
+        .neq("id", task_id) // Exclude current task
+        .order("created_at", { ascending: true });
+
+      if (conversationTasks && conversationTasks.length > 0) {
+        const taskIds = conversationTasks.map(t => t.id);
+        
+        console.log("[MAIN] Found conversation tasks", {
+          master_task_id: task.master_task_id,
+          task_count: taskIds.length,
+          task_ids: taskIds,
+        });
+        
+        // Get messages from previous tasks in the conversation
+        const { data: historyMessages } = await supabase
+          .from("task_messages")
+          .select("role, type, content, sequence_number, task_id")
+          .in("task_id", taskIds)
+          .in("type", ["user_message", "assistant_message"])
+          .order("created_at", { ascending: true });
+
+        if (historyMessages && historyMessages.length > 0) {
+          conversationHistory = historyMessages
+            .filter(msg => msg.role === "user" || msg.role === "assistant")
+            .map(msg => ({
+              role: msg.role as "user" | "assistant",
+              content: typeof msg.content === "object" && msg.content !== null
+                ? (msg.content as { text?: string }).text || JSON.stringify(msg.content)
+                : String(msg.content),
+            }));
+        }
+      }
+
+      console.log("[MAIN] Loaded conversation history", {
+        master_task_id: task.master_task_id,
+        history_messages: conversationHistory.length,
+      });
+    }
+
+    // Fetch agent
     let agent: Agent | null = null;
     if (task.agent_id) {
-      const { data: agentData } = await supabase
-        .from("agents")
-        .select("*")
-        .eq("id", task.agent_id)
-        .single();
-      agent = agentData;
+      const { data } = await supabase.from("agents").select("*").eq("id", task.agent_id).single();
+      agent = data;
     }
-
     if (!agent) {
-      // Try to find default agent
-      const { data: defaultAgent } = await supabase
-        .from("agents")
-        .select("*")
-        .eq("is_default", true)
-        .single();
-      agent = defaultAgent;
+      const { data } = await supabase.from("agents").select("*").eq("is_default", true).single();
+      agent = data;
     }
-
     if (!agent) {
-      await addTaskMessage("error", "No agent configured for this task");
-      await supabase
-        .from("tasks")
-        .update({ status: "failed", output: { error: "No agent configured" } })
-        .eq("id", task_id);
-      return new Response(JSON.stringify({ error: "No agent configured" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 400,
-      });
+      await logger.logError("No agent configured", {}, true);
+      return new Response(
+        JSON.stringify({ error: "No agent configured" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 },
+      );
     }
 
-    await addTaskMessage("status_change", `Using agent: ${agent.name}`);
+    await logger.logStatusChange(`Using agent: ${agent.name}`, {
+      step: "agent_selected",
+      agent_id: agent.id,
+      agent_name: agent.name,
+    });
 
-    // Fetch agent's assigned tools via agent_tools junction table
-    const { data: agentToolsData, error: agentToolsError } = await supabase
+    // Fetch tools
+    const { data: agentToolsData } = await supabase
       .from("agent_tools")
       .select("tool_id")
       .eq("agent_id", agent.id);
 
-    if (agentToolsError) {
-      console.error("Error fetching agent_tools:", agentToolsError);
-    }
-
     const toolIds = agentToolsData?.map((at) => at.tool_id) || [];
-
     let tools: Tool[] = [];
+    
     if (toolIds.length > 0) {
-      const { data: toolsData, error: toolsError } = await supabase
+      const { data: toolsData } = await supabase
         .from("tools")
         .select("*")
         .in("id", toolIds)
         .eq("is_active", true);
-
-      if (toolsError) {
-        console.error("Error fetching tools:", toolsError);
-      }
       tools = toolsData || [];
     }
 
-    // Log loaded tools
-    if (tools.length > 0) {
-      const toolNames = tools.map((t) => t.name).join(", ");
-      await addTaskMessage(
-        "status_change",
-        `Loaded ${tools.length} tool(s): ${toolNames}`,
-        { tool_ids: toolIds, tool_slugs: tools.map((t) => t.slug) },
-      );
-    } else {
-      await addTaskMessage("status_change", "No tools assigned to this agent");
-    }
-
-    // Fetch LLM provider
-    let provider: LLMProvider | null = null;
-    if (agent.provider_id) {
-      const { data: providerData, error: providerError } = await supabase
-        .from("llm_providers")
-        .select("*")
-        .eq("id", agent.provider_id)
-        .single();
-      if (providerError) {
-        console.error("Error fetching agent's provider:", providerError);
-        await addTaskMessage("error", `Failed to fetch provider: ${providerError.message}`);
-      }
-      provider = providerData;
-    } else {
-      await addTaskMessage("status_change", "Agent has no llm_provider_id set, using fallback");
-    }
-
-    if (!provider) {
-      // Fallback to first active provider
-      await addTaskMessage("status_change", "Looking for fallback provider...");
-      const { data: defaultProvider } = await supabase
-        .from("llm_providers")
-        .select("*")
-        .eq("is_active", true)
-        .limit(1)
-        .single();
-      provider = defaultProvider;
-    }
-
-    if (!provider) {
-      await addTaskMessage("error", "No LLM provider configured");
-      await supabase
-        .from("tasks")
-        .update({
-          status: "failed",
-          output: { error: "No LLM provider configured" },
-        })
-        .eq("id", task_id);
-      return new Response(
-        JSON.stringify({ error: "No LLM provider configured" }),
-        {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-          status: 400,
-        },
-      );
-    }
-
-    // Log which provider we're using
-    await addTaskMessage("status_change", `Using LLM provider: ${provider.display_name} (${provider.name})`);
-
-    // Map provider names to their Vault secret names
-    const vaultKeyMapping: Record<string, string> = {
-      xai: "XAI_API_KEY",
-      anthropic: "ANTHROPIC_API_KEY",
-      google: "GOOGLE_AI_API_KEY",
-      google_ai: "GOOGLE_AI_API_KEY",
-      openai: "OPENAI_API_KEY",
-    };
-    const vaultKeyName = vaultKeyMapping[provider.name.toLowerCase()] || `${provider.name.toUpperCase()}_API_KEY`;
-    const { data: apiKeyData, error: vaultError } = await supabase.rpc(
-      "get_vault_secret",
-      { secret_name: vaultKeyName },
+    await logger.logStatusChange(
+      tools.length > 0 
+        ? `Loaded ${tools.length} tool(s): ${tools.map(t => t.name).join(", ")}`
+        : "No tools assigned",
+      { step: "tools_loaded", tool_count: tools.length },
     );
 
-    if (vaultError || !apiKeyData) {
-      await addTaskMessage(
-        "error",
-        `API key not found in Vault: ${vaultKeyName}`,
-      );
-      await supabase
-        .from("tasks")
-        .update({
-          status: "failed",
-          output: { error: `API key not found: ${vaultKeyName}` },
-        })
-        .eq("id", task_id);
+    // Fetch provider
+    let provider: LLMProvider | null = null;
+    if (agent.provider_id) {
+      const { data } = await supabase.from("llm_providers").select("*").eq("id", agent.provider_id).single();
+      provider = data;
+    }
+    if (!provider) {
+      const { data } = await supabase.from("llm_providers").select("*").eq("is_active", true).limit(1).single();
+      provider = data;
+    }
+    if (!provider) {
+      await logger.logError("No LLM provider configured", {}, true);
       return new Response(
-        JSON.stringify({ error: `API key not found: ${vaultKeyName}` }),
-        {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-          status: 400,
-        },
+        JSON.stringify({ error: "No LLM provider configured" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 },
       );
     }
 
-    const apiKey = apiKeyData;
+    await logger.logStatusChange(`Using provider: ${provider.display_name}`, {
+      step: "provider_selected",
+      provider_id: provider.id,
+      provider_name: provider.name,
+    });
 
-    // Build tool definitions for LLM
-    const toolDefinitions = tools
-      .map((tool) => {
-        const config = tool.config as Record<string, unknown>;
+    // Get API key
+    const vaultKeyName = getVaultKeyName(provider.name);
+    const { data: apiKey, error: vaultError } = await supabase.rpc("get_vault_secret", { secret_name: vaultKeyName });
+    
+    if (vaultError || !apiKey) {
+      await logger.logError(`API key not found: ${vaultKeyName}`, {}, true);
+      return new Response(
+        JSON.stringify({ error: `API key not found: ${vaultKeyName}` }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 },
+      );
+    }
 
-        if (tool.type === "mcp_server") {
-          // MCP server tool - extract function definitions from config
-          const mcpTools =
-            (config.tools as Array<{
-              name: string;
-              description: string;
-              inputSchema?: Record<string, unknown>;
-            }>) || [];
+    // Build tool definitions (uses cached tools from verify-mcp)
+    const toolDefinitions: LLMToolDefinition[] = [];
+    
+    for (const tool of tools) {
+      if (tool.type === "mcp_server") {
+        const config = tool.config;
+        const mcpTools = hasPreDefinedTools(config) ? config.tools! : [];
 
-          return mcpTools.map((mcpTool) => ({
+        if (mcpTools.length === 0) {
+          console.log("[MAIN] MCP tool has no cached tools, run verify-mcp first", { tool_name: tool.name });
+          continue;
+        }
+
+        // Add MCP tools to definitions
+        for (const mcpTool of mcpTools) {
+          toolDefinitions.push({
             type: "function",
             function: {
               name: `${tool.slug}__${mcpTool.name}`,
               description: mcpTool.description || `Tool from ${tool.name}`,
-              parameters: mcpTool.inputSchema || {
-                type: "object",
-                properties: {},
-              },
+              parameters: mcpTool.inputSchema || { type: "object", properties: {} },
             },
-          }));
+          });
         }
-
-        // Standard tool definition
-        return [
-          {
-            type: "function",
-            function: {
-              name: tool.slug,
-              description: tool.description || tool.name,
-              parameters: config.parameters || {
-                type: "object",
-                properties: {},
-              },
-            },
-          },
-        ];
-      })
-      .flat();
-
-    // Log thinking step
-    await addTaskMessage(
-      "thinking",
-      "Processing request and preparing to call LLM...",
-    );
-
-    // Build messages for LLM
-    const messages: Array<{ role: string; content: string }> = [];
-
-    if (agent.system_prompt) {
-      messages.push({ role: "system", content: agent.system_prompt });
-    }
-
-    messages.push({ role: "user", content: userMessage });
-
-    // Call the LLM provider
-    const model = agent.model || provider.default_model;
-    let llmResponse: string = "";
-    let toolCalls: Array<{
-      id: string;
-      function: { name: string; arguments: string };
-    }> = [];
-
-    try {
-      if (provider.name === "openai" || provider.name === "xai") {
-        const baseUrl = provider.base_url || "https://api.openai.com/v1";
-        const response = await fetch(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            messages,
-            tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
-            tool_choice: toolDefinitions.length > 0 ? "auto" : undefined,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`LLM API error: ${response.status} - ${errorText}`);
-        }
-
-        const data = await response.json();
-        const choice = data.choices?.[0];
-
-        if (choice?.message?.tool_calls) {
-          toolCalls = choice.message.tool_calls;
-        }
-
-        llmResponse = choice?.message?.content || "";
-      } else if (provider.name === "anthropic") {
-        // Convert tools to Anthropic format
-        const anthropicTools = toolDefinitions.map((t) => ({
-          name: t.function.name,
-          description: t.function.description,
-          input_schema: t.function.parameters,
-        }));
-
-        const response = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "x-api-key": apiKey,
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-          },
-          body: JSON.stringify({
-            model,
-            max_tokens: 4096,
-            system: agent.system_prompt || undefined,
-            messages: [{ role: "user", content: userMessage }],
-            tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(
-            `Anthropic API error: ${response.status} - ${errorText}`,
-          );
-        }
-
-        const data = await response.json();
-
-        // Extract text and tool use from response
-        for (const block of data.content || []) {
-          if (block.type === "text") {
-            llmResponse += block.text;
-          } else if (block.type === "tool_use") {
-            toolCalls.push({
-              id: block.id,
-              function: {
-                name: block.name,
-                arguments: JSON.stringify(block.input),
-              },
-            });
+      } else if (tool.type === "handoff") {
+        // Handoff tool - build parameters from context_variables
+        const config = tool.config;
+        const contextVars = config.context_variables || [];
+        
+        const properties: Record<string, unknown> = {};
+        const required: string[] = [];
+        
+        for (const cv of contextVars) {
+          properties[cv.name] = {
+            type: cv.type === "object" ? "object" : cv.type,
+            description: cv.description,
+          };
+          if (cv.required) {
+            required.push(cv.name);
           }
         }
-      } else if (provider.name === "google_ai") {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ role: "user", parts: [{ text: userMessage }] }],
-              systemInstruction: agent.system_prompt
-                ? { parts: [{ text: agent.system_prompt }] }
-                : undefined,
-            }),
+        
+        toolDefinitions.push({
+          type: "function",
+          function: {
+            name: tool.slug,
+            description: tool.description || `Hand off to ${config.target_agent_slug}`,
+            parameters: {
+              type: "object",
+              properties,
+              required: required.length > 0 ? required : undefined,
+            },
           },
-        );
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(
-            `Google AI API error: ${response.status} - ${errorText}`,
-          );
-        }
-
-        const data = await response.json();
-        llmResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        });
+        
+        console.log("[MAIN] Added handoff tool", {
+          tool_slug: tool.slug,
+          target_agent: config.target_agent_slug,
+          context_vars: contextVars.map(cv => cv.name),
+        });
+      } else {
+        // Standard tool
+        toolDefinitions.push({
+          type: "function",
+          function: {
+            name: tool.slug,
+            description: tool.description || tool.name,
+            parameters: tool.config.parameters || { type: "object", properties: {} },
+          },
+        });
       }
-    } catch (llmError) {
-      const errorMessage =
-        llmError instanceof Error ? llmError.message : String(llmError);
-      await addTaskMessage("error", `LLM call failed: ${errorMessage}`);
-      await supabase
-        .from("tasks")
-        .update({ status: "failed", output: { error: errorMessage } })
-        .eq("id", task_id);
-      return new Response(JSON.stringify({ error: errorMessage }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 500,
-      });
     }
 
-    // Process tool calls if any
+    console.log("[MAIN] Tool definitions built", {
+      count: toolDefinitions.length,
+      names: toolDefinitions.map(t => t.function.name),
+    });
+
+    // Build system prompt with handoff context if present
+    let systemPrompt = agent.system_prompt || "";
+    const taskContext = task.context as TaskContext | null;
+    
+    if (taskContext && Object.keys(taskContext).length > 0) {
+      const contextLines: string[] = [];
+      
+      // Add handoff metadata
+      if (taskContext._handoff_from) {
+        contextLines.push(`You received this conversation from the "${taskContext._handoff_from}" agent.`);
+      }
+      if (taskContext._handoff_instructions) {
+        contextLines.push(`Instructions: ${taskContext._handoff_instructions}`);
+      }
+      
+      // Add context variables (exclude internal _ prefixed ones)
+      const contextVars = Object.entries(taskContext)
+        .filter(([key]) => !key.startsWith("_"))
+        .map(([key, value]) => `- ${key}: ${JSON.stringify(value)}`)
+        .join("\n");
+      
+      if (contextVars) {
+        contextLines.push(`\nContext variables:\n${contextVars}`);
+      }
+      
+      if (contextLines.length > 0) {
+        systemPrompt = `${systemPrompt}\n\n---\nHandoff Context:\n${contextLines.join("\n")}`;
+        console.log("[MAIN] Added handoff context to system prompt", {
+          from: taskContext._handoff_from,
+          context_keys: Object.keys(taskContext).filter(k => !k.startsWith("_")),
+        });
+      }
+    }
+
+    await logger.logThinking("Calling LLM...", {
+      step: "llm_call_init",
+      provider: provider.name,
+      model: agent.model || provider.default_model,
+      tool_count: toolDefinitions.length,
+      has_handoff_context: !!(taskContext && taskContext._handoff_from),
+    });
+
+    // Call LLM
+    const model = agent.model || provider.default_model;
+    let llmResponse = "";
+    let toolCalls: ToolCall[] = [];
+
+    try {
+      const result = await callLLM(
+        provider,
+        apiKey,
+        model,
+        systemPrompt,
+        userMessage,
+        toolDefinitions.length > 0 ? toolDefinitions : undefined,
+        conversationHistory.length > 0 ? conversationHistory : undefined,
+      );
+      llmResponse = result.response;
+      toolCalls = result.toolCalls;
+
+      await logger.logThinking(`LLM responded${toolCalls.length > 0 ? ` with ${toolCalls.length} tool call(s)` : ""}`, {
+        step: "llm_response_received",
+        has_tool_calls: toolCalls.length > 0,
+        tool_call_count: toolCalls.length,
+      });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      await logger.logError(`LLM call failed: ${errorMsg}`, {}, true);
+      return new Response(
+        JSON.stringify({ error: errorMsg }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 },
+      );
+    }
+
+    // Process tool calls
     if (toolCalls.length > 0) {
+      const toolResults: string[] = [];
+      let handoffExecuted = false;
+
       for (const toolCall of toolCalls) {
+        const toolCallStart = Date.now();
         const toolName = toolCall.function.name;
         const toolArgs = JSON.parse(toolCall.function.arguments || "{}");
 
-        await addTaskMessage("tool_call", `Calling tool: ${toolName}`, {
-          tool_name: toolName,
-          arguments: toolArgs,
-        });
+        await logger.logToolCall(toolName, toolCall.id, toolArgs);
 
-        // Find the tool and execute it
         let toolResult = "";
         const [toolSlug, mcpFunctionName] = toolName.includes("__")
           ? toolName.split("__")
@@ -463,214 +395,184 @@ Deno.serve(async (req) => {
 
         if (tool) {
           try {
-            if (tool.type === "mcp_server" && mcpFunctionName) {
-              // Execute MCP tool
-              const mcpConfig = tool.config as {
-                endpoint?: string;
-                transport?: string;
-              };
-
-              // Get tool credential if needed
-              let toolApiKey: string | null = null;
-              if (tool.credential_secret_name) {
-                const { data: credData } = await supabase.rpc(
-                  "get_vault_secret",
-                  {
-                    secret_name: tool.credential_secret_name,
-                  },
-                );
-                toolApiKey = credData;
-              }
-
-              if (mcpConfig.endpoint) {
-                // Call MCP server endpoint
-                const mcpResponse = await fetch(mcpConfig.endpoint, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    ...(toolApiKey
-                      ? { Authorization: `Bearer ${toolApiKey}` }
-                      : {}),
-                  },
-                  body: JSON.stringify({
-                    jsonrpc: "2.0",
-                    id: 1,
-                    method: "tools/call",
-                    params: {
-                      name: mcpFunctionName,
-                      arguments: toolArgs,
-                    },
-                  }),
-                });
-
-                const mcpResult = await mcpResponse.json();
-                toolResult = JSON.stringify(
-                  mcpResult.result || mcpResult.error || mcpResult,
-                );
+            // Handle handoff tool
+            if (tool.type === "handoff") {
+              const config = tool.config;
+              const targetAgentId = config.target_agent_id;
+              const targetAgentSlug = config.target_agent_slug;
+              
+              // Fetch target agent to get name
+              const { data: targetAgent } = await supabase
+                .from("agents")
+                .select("id, name, slug")
+                .eq("id", targetAgentId)
+                .single();
+              
+              if (!targetAgent) {
+                toolResult = `Handoff failed: Target agent not found (${targetAgentSlug})`;
               } else {
-                toolResult = `MCP server endpoint not configured for tool: ${tool.name}`;
+                // Build context for new task
+                const existingContext = (task.context as TaskContext) || {};
+                const handoffChain = existingContext._handoff_chain || [];
+                handoffChain.push(agent.slug);
+                
+                const newContext: TaskContext = {
+                  ...existingContext,
+                  ...toolArgs,
+                  _handoff_from: agent.slug,
+                  _handoff_tool: tool.slug,
+                  _handoff_instructions: config.handoff_instructions,
+                  _handoff_chain: handoffChain,
+                };
+                
+                // Determine master_task_id
+                const masterTaskId = task.master_task_id || task.id;
+                
+                // Create new task for target agent
+                const { data: newTask, error: createError } = await supabase
+                  .from("tasks")
+                  .insert({
+                    master_task_id: masterTaskId,
+                    parent_id: task_id,
+                    agent_id: targetAgent.id,
+                    agent_slug: targetAgent.slug,
+                    status: "pending",
+                    input: { message: userMessage },
+                    context: newContext,
+                  })
+                  .select()
+                  .single();
+                
+                if (createError || !newTask) {
+                  toolResult = `Handoff failed: Could not create task - ${createError?.message}`;
+                } else {
+                  console.log("[MAIN] Handoff task created", {
+                    new_task_id: newTask.id,
+                    target_agent: targetAgent.slug,
+                    context_keys: Object.keys(newContext),
+                  });
+                  
+                  // Log handoff message
+                  await logger.logHandoff(targetAgent.name, targetAgent.slug, newContext, {
+                    new_task_id: newTask.id,
+                    tool_call_id: toolCall.id,
+                  });
+                  
+                  handoffExecuted = true;
+                  toolResult = `Handed off to ${targetAgent.name}`;
+                  
+                  // Trigger new task processing (fire and forget)
+                  supabase.functions.invoke("process-task", {
+                    body: { task_id: newTask.id },
+                  }).catch(err => {
+                    console.error("[MAIN] Failed to trigger handoff task:", err);
+                  });
+                }
+              }
+            } else if (tool.type === "mcp_server" && mcpFunctionName) {
+              const mcpUrl = getMcpUrl(tool.config);
+              if (mcpUrl) {
+                let toolApiKey: string | null = null;
+                if (tool.credential_secret_name) {
+                  const { data } = await supabase.rpc("get_vault_secret", { secret_name: tool.credential_secret_name });
+                  toolApiKey = data;
+                }
+                toolResult = await executeMcpTool(mcpUrl, mcpFunctionName, toolArgs, toolApiKey, tool.name);
+              } else {
+                toolResult = `MCP endpoint not configured for: ${tool.name}`;
               }
             } else if (tool.type === "http_api") {
-              // Execute HTTP API tool
-              const httpConfig = tool.config as {
-                url?: string;
-                method?: string;
-                headers?: Record<string, string>;
-              };
-
-              if (httpConfig.url) {
-                const response = await fetch(httpConfig.url, {
-                  method: httpConfig.method || "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    ...(httpConfig.headers || {}),
-                  },
+              const config = tool.config;
+              if (config.url) {
+                const response = await fetch(config.url, {
+                  method: config.method || "POST",
+                  headers: { "Content-Type": "application/json", ...(config.headers || {}) },
                   body: JSON.stringify(toolArgs),
                 });
                 toolResult = await response.text();
               } else {
-                toolResult = `HTTP API URL not configured for tool: ${tool.name}`;
+                toolResult = `HTTP URL not configured for: ${tool.name}`;
               }
             } else if (tool.type === "supabase_rpc") {
-              // Execute Supabase RPC
-              const rpcConfig = tool.config as { function_name?: string };
-              if (rpcConfig.function_name) {
-                const { data: rpcResult, error: rpcError } = await supabase.rpc(
-                  rpcConfig.function_name,
-                  toolArgs,
-                );
-                toolResult = rpcError
-                  ? `RPC error: ${rpcError.message}`
-                  : JSON.stringify(rpcResult);
+              const config = tool.config;
+              if (config.function_name) {
+                const { data, error } = await supabase.rpc(config.function_name, toolArgs);
+                toolResult = error ? `RPC error: ${error.message}` : JSON.stringify(data);
               } else {
-                toolResult = `RPC function name not configured for tool: ${tool.name}`;
+                toolResult = `RPC function not configured for: ${tool.name}`;
               }
             } else {
               toolResult = `Unknown tool type: ${tool.type}`;
             }
-          } catch (toolError) {
-            toolResult = `Tool execution error: ${
-              toolError instanceof Error ? toolError.message : String(toolError)
-            }`;
+          } catch (error) {
+            toolResult = `Tool error: ${error instanceof Error ? error.message : String(error)}`;
           }
         } else {
           toolResult = `Tool not found: ${toolSlug}`;
         }
 
-        await addTaskMessage("tool_result", toolResult, {
-          tool_name: toolName,
-          success: !toolResult.includes("error"),
-        });
-
-        // Build tool result message for follow-up LLM call
-        messages.push({
-          role: "assistant",
-          content: "",
-          // @ts-ignore - OpenAI format includes tool_calls on assistant message
-          tool_calls: [{
-            id: toolCall.id,
-            type: "function",
-            function: {
-              name: toolName,
-              arguments: toolCall.function.arguments,
-            },
-          }],
-        } as { role: string; content: string });
-
-        messages.push({
-          role: "tool",
-          content: toolResult,
-          // @ts-ignore - OpenAI format includes tool_call_id
-          tool_call_id: toolCall.id,
-        } as { role: string; content: string });
+        const duration = Date.now() - toolCallStart;
+        const success = !toolResult.toLowerCase().includes("error") && !toolResult.includes("not found");
+        
+        await logger.logToolResult(toolName, toolCall.id, toolResult, success, duration);
+        toolResults.push(toolResult);
+        
+        // If handoff was executed, stop processing other tools and return
+        if (handoffExecuted) {
+          console.log("[MAIN] Handoff completed, task ending", { task_id });
+          return new Response(
+            JSON.stringify({ success: true, handoff: true, response: toolResult }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
       }
 
-      // Make a follow-up LLM call to synthesize a response from tool results
-      await addTaskMessage("thinking", "Synthesizing response from tool results...");
+      // Synthesize response from tool results
+      await logger.logThinking("Synthesizing response from tool results...", {
+        step: "llm_synthesis_start",
+      });
 
       try {
-        if (provider.name === "openai" || provider.name === "xai") {
-          const baseUrl = provider.base_url || "https://api.openai.com/v1";
-          const response = await fetch(`${baseUrl}/chat/completions`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model,
-              messages,
-            }),
-          });
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Follow-up LLM API error: ${response.status} - ${errorText}`);
-          }
-
-          const data = await response.json();
-          llmResponse = data.choices?.[0]?.message?.content || "";
-        } else if (provider.name === "anthropic") {
-          // For Anthropic, rebuild conversation with tool results
-          const anthropicMessages = [
-            { role: "user", content: userMessage },
-            { role: "assistant", content: [{ type: "tool_use", id: toolCalls[0].id, name: toolCalls[0].function.name, input: JSON.parse(toolCalls[0].function.arguments || "{}") }] },
-            { role: "user", content: [{ type: "tool_result", tool_use_id: toolCalls[0].id, content: messages[messages.length - 1].content }] },
-          ];
-
-          const response = await fetch("https://api.anthropic.com/v1/messages", {
-            method: "POST",
-            headers: {
-              "x-api-key": apiKey,
-              "Content-Type": "application/json",
-              "anthropic-version": "2023-06-01",
-            },
-            body: JSON.stringify({
-              model,
-              max_tokens: 4096,
-              system: agent.system_prompt || undefined,
-              messages: anthropicMessages,
-            }),
-          });
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Follow-up Anthropic API error: ${response.status} - ${errorText}`);
-          }
-
-          const data = await response.json();
-          for (const block of data.content || []) {
-            if (block.type === "text") {
-              llmResponse = block.text;
-            }
-          }
-        } else {
-          // Fallback for providers without native tool result handling
-          llmResponse = "Tool execution completed. Results: " + messages[messages.length - 1].content;
-        }
-      } catch (followUpError) {
-        const errorMessage = followUpError instanceof Error ? followUpError.message : String(followUpError);
-        await addTaskMessage("error", `Follow-up LLM call failed: ${errorMessage}`);
-        llmResponse = "Tool executed successfully. Error synthesizing response: " + errorMessage;
+        llmResponse = await synthesizeResponse(
+          provider,
+          apiKey,
+          model,
+          agent.system_prompt,
+          userMessage,
+          toolCalls,
+          toolResults,
+        );
+      } catch (error) {
+        llmResponse = `Tool executed. Synthesis error: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
 
-    // Log assistant response
-    await addTaskMessage(
-      "assistant_message",
-      llmResponse || "No response generated",
-    );
+    // Log final response
+    const totalDuration = Date.now() - taskStartTime;
+    await logger.logAssistantMessage(llmResponse || "No response", {
+      step: "final_response",
+      total_duration_ms: totalDuration,
+    });
 
-    // Update task as completed
+    // Update task
     await supabase
       .from("tasks")
       .update({
-        status: "completed",
         output: { response: llmResponse },
+        intermediate_data: {
+          execution_log: {
+            total_duration_ms: totalDuration,
+            started_at: new Date(taskStartTime).toISOString(),
+            completed_at: new Date().toISOString(),
+            tool_calls_count: toolCalls.length,
+          },
+        },
       })
       .eq("id", task_id);
 
-    await addTaskMessage("status_change", "Task completed");
+    await logger.logComplete(llmResponse, { total_duration_ms: totalDuration });
+
+    console.log("[MAIN] Task completed", { task_id, duration_ms: totalDuration });
 
     return new Response(
       JSON.stringify({ success: true, response: llmResponse }),
@@ -678,10 +580,10 @@ Deno.serve(async (req) => {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("Process task error:", message);
-    return new Response(JSON.stringify({ error: message }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-      status: 500,
-    });
+    console.error("[MAIN] Error:", message);
+    return new Response(
+      JSON.stringify({ error: message }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 },
+    );
   }
 });

@@ -1,0 +1,11 @@
+---
+alwaysApply: true
+---
+
+# Supabase Project Configuration
+project_id: bgqxccmdcpegvbuxmnrf
+project_url: https://bgqxccmdcpegvbuxmnrf.supabase.co
+
+Always create and edit supabase schema, functions, triggers, sql, and edge functions locally, so we can version control. 
+
+Use the Supabase MCP tool for all deploying of schema, functions, etc. 

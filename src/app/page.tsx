@@ -1,7 +1,7 @@
 "use client"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Bot, ListTodo, Wrench, Zap, AlertCircle, CheckCircle, Clock, Activity } from "lucide-react"
+import { Bot, ListTodo, Wrench, Zap, AlertCircle, CheckCircle, Clock, Activity, Trophy, Crown, Medal } from "lucide-react"
 import { useEffect, useState } from "react"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import type { Task, Agent, Tool, Skill } from "@/lib/supabase-types"
@@ -19,9 +19,21 @@ interface Stats {
   totalSkills: number
 }
 
+interface LeaderboardItem {
+  name: string
+  count: number
+}
+
+interface Leaderboards {
+  agents: LeaderboardItem[]
+  skills: LeaderboardItem[]
+  tools: LeaderboardItem[]
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [recentTasks, setRecentTasks] = useState<Task[]>([])
+  const [leaderboards, setLeaderboards] = useState<Leaderboards>({ agents: [], skills: [], tools: [] })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -36,12 +48,16 @@ export default function Dashboard() {
           { data: tasks },
           { data: agents },
           { data: tools },
-          { data: skills }
+          { data: skills },
+          { data: skillMessages },
+          { data: toolMessages }
         ] = await Promise.all([
           supabase.from("tasks").select("*"),
           supabase.from("agents").select("*"),
           supabase.from("tools").select("*"),
-          supabase.from("skills").select("*")
+          supabase.from("skills").select("*"),
+          supabase.from("task_messages").select("content, task_id").eq("type", "skill_load"),
+          supabase.from("task_messages").select("metadata, task_id").eq("type", "tool_call")
         ])
 
         const taskList = tasks || []
@@ -61,6 +77,51 @@ export default function Dashboard() {
         })
 
         setRecentTasks(taskList.slice(0, 5))
+
+        // Build agent leaderboard from tasks
+        const agentCounts: Record<string, { name: string; count: number }> = {}
+        taskList.forEach(task => {
+          if (task.agent_id) {
+            const agent = agentList.find(a => a.id === task.agent_id)
+            const name = agent?.name || task.agent_slug || "Unknown"
+            agentCounts[task.agent_id] = agentCounts[task.agent_id] || { name, count: 0 }
+            agentCounts[task.agent_id].count++
+          }
+        })
+
+        // Build skill leaderboard - count completed tasks where skill was used
+        const completedTaskIds = new Set(taskList.filter(t => t.status === 'completed').map(t => t.id))
+        const skillTaskSets: Record<string, Set<string>> = {}
+        ;(skillMessages || []).forEach((msg: { content: { skill_name?: string }; task_id?: string }) => {
+          const skillName = msg.content?.skill_name
+          const taskId = msg.task_id
+          // Only count if task completed successfully
+          if (skillName && taskId && completedTaskIds.has(taskId)) {
+            skillTaskSets[skillName] = skillTaskSets[skillName] || new Set()
+            skillTaskSets[skillName].add(taskId)
+          }
+        })
+        const skillCounts: Record<string, number> = {}
+        Object.entries(skillTaskSets).forEach(([skillName, taskIds]) => {
+          skillCounts[skillName] = taskIds.size
+        })
+
+        // Build tool leaderboard from task_messages
+        const toolCounts: Record<string, number> = {}
+        ;(toolMessages || []).forEach((msg: { metadata: { tool_name?: string } }) => {
+          const toolName = msg.metadata?.tool_name
+          if (toolName) {
+            // Clean up tool name (e.g. "exa-search__Exa_Search" -> "Exa Search")
+            const cleanName = toolName.split("__").pop()?.replace(/_/g, " ") || toolName
+            toolCounts[cleanName] = (toolCounts[cleanName] || 0) + 1
+          }
+        })
+
+        setLeaderboards({
+          agents: Object.values(agentCounts).sort((a, b) => b.count - a.count).slice(0, 5),
+          skills: Object.entries(skillCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 5),
+          tools: Object.entries(toolCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 5)
+        })
       } catch (error) {
         console.error("Failed to fetch dashboard data:", error)
       } finally {
@@ -155,6 +216,114 @@ export default function Dashboard() {
             </p>
           </CardContent>
         </Card>
+      </div>
+
+      {/* Leaderboards Section */}
+      <div>
+        <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
+          <Trophy className="h-5 w-5 text-amber-500" />
+          Usage Leaderboards
+        </h2>
+        <div className="grid gap-4 md:grid-cols-3">
+          {/* Agents Leaderboard */}
+          <Card className="border-amber-500/20">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Bot className="h-4 w-4 text-amber-500" />
+                Top Agents
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">Total tasks</p>
+            </CardHeader>
+            <CardContent>
+              {leaderboards.agents.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No agent usage yet</p>
+              ) : (
+                <div className="space-y-3">
+                  {leaderboards.agents.map((item, idx) => (
+                    <div key={item.name} className="flex items-center gap-3">
+                      <div className="flex-shrink-0 w-6">
+                        {idx === 0 ? <Crown className="h-4 w-4 text-amber-500" /> :
+                         idx === 1 ? <Medal className="h-4 w-4 text-slate-400" /> :
+                         idx === 2 ? <Medal className="h-4 w-4 text-amber-700" /> :
+                         <span className="text-xs text-muted-foreground ml-1">{idx + 1}</span>}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{item.name}</p>
+                      </div>
+                      <span className="text-sm font-bold text-amber-500">{item.count}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Skills Leaderboard */}
+          <Card className="border-violet-500/20">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Zap className="h-4 w-4 text-violet-500" />
+                Top Skills
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">Completed tasks</p>
+            </CardHeader>
+            <CardContent>
+              {leaderboards.skills.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No skill usage yet</p>
+              ) : (
+                <div className="space-y-3">
+                  {leaderboards.skills.map((item, idx) => (
+                    <div key={item.name} className="flex items-center gap-3">
+                      <div className="flex-shrink-0 w-6">
+                        {idx === 0 ? <Crown className="h-4 w-4 text-violet-500" /> :
+                         idx === 1 ? <Medal className="h-4 w-4 text-slate-400" /> :
+                         idx === 2 ? <Medal className="h-4 w-4 text-violet-700" /> :
+                         <span className="text-xs text-muted-foreground ml-1">{idx + 1}</span>}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{item.name}</p>
+                      </div>
+                      <span className="text-sm font-bold text-violet-500">{item.count}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Tools Leaderboard */}
+          <Card className="border-emerald-500/20">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Wrench className="h-4 w-4 text-emerald-500" />
+                Top Tools
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">Total calls</p>
+            </CardHeader>
+            <CardContent>
+              {leaderboards.tools.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No tool usage yet</p>
+              ) : (
+                <div className="space-y-3">
+                  {leaderboards.tools.map((item, idx) => (
+                    <div key={item.name} className="flex items-center gap-3">
+                      <div className="flex-shrink-0 w-6">
+                        {idx === 0 ? <Crown className="h-4 w-4 text-emerald-500" /> :
+                         idx === 1 ? <Medal className="h-4 w-4 text-slate-400" /> :
+                         idx === 2 ? <Medal className="h-4 w-4 text-emerald-700" /> :
+                         <span className="text-xs text-muted-foreground ml-1">{idx + 1}</span>}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{item.name}</p>
+                      </div>
+                      <span className="text-sm font-bold text-emerald-500">{item.count}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">

@@ -13,7 +13,8 @@ import {
   AlertCircle, 
   RefreshCw,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  ArrowRightLeft
 } from "lucide-react"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
@@ -41,6 +42,7 @@ const messageIcons: Record<MessageType, typeof User> = {
   subtask_created: GitBranch,
   error: AlertCircle,
   status_change: RefreshCw,
+  handoff: ArrowRightLeft,
 }
 
 const messageColors: Record<MessageType, string> = {
@@ -53,6 +55,7 @@ const messageColors: Record<MessageType, string> = {
   subtask_created: "text-cyan-500",
   error: "text-red-500",
   status_change: "text-muted-foreground",
+  handoff: "text-teal-500",
 }
 
 const messageBgColors: Record<MessageType, string> = {
@@ -65,6 +68,7 @@ const messageBgColors: Record<MessageType, string> = {
   subtask_created: "bg-cyan-500/10",
   error: "bg-red-500/10",
   status_change: "bg-muted/50",
+  handoff: "bg-teal-500/10",
 }
 
 const messageLabels: Record<MessageType, string> = {
@@ -77,6 +81,7 @@ const messageLabels: Record<MessageType, string> = {
   subtask_created: "Subtask",
   error: "Error",
   status_change: "Status",
+  handoff: "Handoff",
 }
 
 export function TaskMessageThread({ taskId, variant = "log" }: TaskMessageThreadProps) {

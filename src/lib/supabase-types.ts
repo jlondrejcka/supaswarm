@@ -242,6 +242,7 @@ export type Database = {
         Row: {
           agent_id: string | null
           agent_slug: string | null
+          context: Json
           created_at: string | null
           id: string
           input: Json
@@ -257,6 +258,7 @@ export type Database = {
         Insert: {
           agent_id?: string | null
           agent_slug?: string | null
+          context?: Json
           created_at?: string | null
           id?: string
           input?: Json
@@ -272,6 +274,7 @@ export type Database = {
         Update: {
           agent_id?: string | null
           agent_slug?: string | null
+          context?: Json
           created_at?: string | null
           id?: string
           input?: Json
@@ -433,7 +436,7 @@ export type AgentTool = Tables<'agent_tools'>
 export type AgentSkill = Tables<'agent_skills'>
 
 export type TaskStatus = 'pending' | 'running' | 'pending_subtask' | 'needs_human_review' | 'completed' | 'failed' | 'cancelled'
-export type ToolType = 'internal' | 'mcp_server' | 'http_api' | 'supabase_rpc'
+export type ToolType = 'internal' | 'mcp_server' | 'http_api' | 'supabase_rpc' | 'handoff'
 export type CredentialType = 'api_key' | 'bearer_token' | 'oauth_refresh_token' | 'none'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
@@ -447,6 +450,31 @@ export type MessageType =
   | 'subtask_created' 
   | 'error' 
   | 'status_change'
+  | 'handoff'
+
+// Handoff tool configuration
+export interface HandoffContextVariable {
+  name: string
+  type: 'string' | 'number' | 'boolean' | 'object'
+  required: boolean
+  description: string
+}
+
+export interface HandoffToolConfig {
+  target_agent_id: string
+  target_agent_slug: string
+  context_variables: HandoffContextVariable[]
+  handoff_instructions?: string
+}
+
+// Task context for handoffs
+export interface TaskContext {
+  _handoff_from?: string
+  _handoff_tool?: string
+  _handoff_instructions?: string
+  _handoff_chain?: string[]
+  [key: string]: unknown
+}
 
 export interface TaskMessage {
   id: string

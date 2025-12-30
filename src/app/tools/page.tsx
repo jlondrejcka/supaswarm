@@ -24,21 +24,24 @@ import {
 } from "@/components/ui/select"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
-import type { Tool, ToolType } from "@/lib/supabase-types"
-import { Plus, Wrench, Globe, Server, Database, Save } from "lucide-react"
+import type { Tool, ToolType, Agent, HandoffContextVariable } from "@/lib/supabase-types"
+import { Plus, Wrench, Globe, Server, Database, Save, Zap, CheckCircle, XCircle, Loader2, ArrowRightLeft, Trash2 } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
 
 const toolTypeIcons: Record<ToolType, typeof Wrench> = {
   internal: Wrench,
   mcp_server: Server,
   http_api: Globe,
-  supabase_rpc: Database
+  supabase_rpc: Database,
+  handoff: ArrowRightLeft
 }
 
 const toolTypeLabels: Record<ToolType, string> = {
   internal: "Internal",
   mcp_server: "MCP Server",
   http_api: "HTTP API",
-  supabase_rpc: "Supabase RPC"
+  supabase_rpc: "Supabase RPC",
+  handoff: "Agent Handoff"
 }
 
 export default function ToolsPage() {
@@ -54,9 +57,28 @@ export default function ToolsPage() {
     type: "mcp_server" as ToolType,
     config: "{}",
   })
+  
+  // MCP verification state
+  const [mcpUrl, setMcpUrl] = useState("")
+  const [mcpApiKey, setMcpApiKey] = useState("")
+  const [verifying, setVerifying] = useState(false)
+  const [verifyResult, setVerifyResult] = useState<{
+    success: boolean
+    tools?: Array<{ name: string; description: string }>
+    error?: string
+    latency_ms?: number
+    server_info?: Record<string, unknown>
+  } | null>(null)
+  
+  // Handoff configuration state
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [targetAgentId, setTargetAgentId] = useState("")
+  const [handoffInstructions, setHandoffInstructions] = useState("")
+  const [contextVariables, setContextVariables] = useState<HandoffContextVariable[]>([])
 
   useEffect(() => {
     fetchTools()
+    fetchAgents()
   }, [])
 
   async function fetchTools() {
@@ -80,6 +102,23 @@ export default function ToolsPage() {
     }
   }
 
+  async function fetchAgents() {
+    if (!supabase) return
+    
+    try {
+      const { data, error } = await supabase
+        .from("agents")
+        .select("*")
+        .eq("is_active", true)
+        .order("name")
+
+      if (error) throw error
+      setAgents(data || [])
+    } catch (error) {
+      console.error("Failed to fetch agents:", error)
+    }
+  }
+
   function generateSlug(name: string) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
   }
@@ -93,6 +132,13 @@ export default function ToolsPage() {
       type: "mcp_server",
       config: "{}",
     })
+    setMcpUrl("")
+    setMcpApiKey("")
+    setVerifyResult(null)
+    // Reset handoff state
+    setTargetAgentId("")
+    setHandoffInstructions("")
+    setContextVariables([])
     setDialogOpen(true)
   }
 
@@ -105,7 +151,70 @@ export default function ToolsPage() {
       type: tool.type as ToolType,
       config: JSON.stringify(tool.config, null, 2),
     })
+    // Extract MCP URL from config if it exists
+    const config = tool.config as Record<string, unknown>
+    setMcpUrl((config?.mcp_url as string) || "")
+    setMcpApiKey("")
+    setVerifyResult(null)
+    // Extract handoff config if it exists
+    if (tool.type === "handoff") {
+      setTargetAgentId((config?.target_agent_id as string) || "")
+      setHandoffInstructions((config?.handoff_instructions as string) || "")
+      setContextVariables((config?.context_variables as HandoffContextVariable[]) || [])
+    } else {
+      setTargetAgentId("")
+      setHandoffInstructions("")
+      setContextVariables([])
+    }
     setDialogOpen(true)
+  }
+
+  async function handleVerifyMcp() {
+    if (!mcpUrl) return
+    
+    setVerifying(true)
+    setVerifyResult(null)
+    
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/verify-mcp`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            mcp_url: mcpUrl,
+            api_key: mcpApiKey || undefined,
+            tool_id: editingTool?.id,
+          }),
+        }
+      )
+      
+      const result = await response.json()
+      setVerifyResult(result)
+      
+      // Auto-update config if successful
+      if (result.success && result.tools) {
+        const newConfig = {
+          mcp_url: mcpUrl,
+          tools: result.tools,
+          server_info: result.server_info,
+          last_verified: new Date().toISOString(),
+        }
+        setFormData(prev => ({
+          ...prev,
+          config: JSON.stringify(newConfig, null, 2),
+        }))
+      }
+    } catch (error) {
+      setVerifyResult({
+        success: false,
+        error: error instanceof Error ? error.message : "Verification failed",
+      })
+    } finally {
+      setVerifying(false)
+    }
   }
 
   async function handleSave() {
@@ -113,11 +222,23 @@ export default function ToolsPage() {
 
     setSaving(true)
     try {
-      let configJson = {}
-      try {
-        configJson = JSON.parse(formData.config)
-      } catch {
-        configJson = {}
+      let configJson: Record<string, unknown> = {}
+      
+      // Build config based on tool type
+      if (formData.type === "handoff") {
+        const targetAgent = agents.find(a => a.id === targetAgentId)
+        configJson = {
+          target_agent_id: targetAgentId,
+          target_agent_slug: targetAgent?.slug || "",
+          context_variables: contextVariables,
+          handoff_instructions: handoffInstructions || undefined,
+        }
+      } else {
+        try {
+          configJson = JSON.parse(formData.config)
+        } catch {
+          configJson = {}
+        }
       }
 
       const payload = {
@@ -149,6 +270,23 @@ export default function ToolsPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  function addContextVariable() {
+    setContextVariables([
+      ...contextVariables,
+      { name: "", type: "string", required: false, description: "" }
+    ])
+  }
+
+  function updateContextVariable(index: number, field: keyof HandoffContextVariable, value: unknown) {
+    const updated = [...contextVariables]
+    updated[index] = { ...updated[index], [field]: value }
+    setContextVariables(updated)
+  }
+
+  function removeContextVariable(index: number) {
+    setContextVariables(contextVariables.filter((_, i) => i !== index))
   }
 
   if (!isSupabaseConfigured) {
@@ -216,11 +354,25 @@ export default function ToolsPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <Badge variant="outline">
                       {toolTypeLabels[tool.type as ToolType] || tool.type}
                     </Badge>
                     <span className="text-xs text-muted-foreground font-mono">{tool.slug}</span>
+                    {/* Show cached tools count for MCP servers */}
+                    {tool.type === "mcp_server" && (tool.config as Record<string, unknown>)?.tools && (
+                      <Badge variant="secondary" className="text-xs">
+                        <CheckCircle className="h-3 w-3 mr-1" />
+                        {((tool.config as Record<string, unknown>).tools as unknown[]).length} tools
+                      </Badge>
+                    )}
+                    {/* Show target agent for handoff tools */}
+                    {tool.type === "handoff" && (tool.config as Record<string, unknown>)?.target_agent_slug && (
+                      <Badge variant="secondary" className="text-xs">
+                        <ArrowRightLeft className="h-3 w-3 mr-1" />
+                        → {(tool.config as Record<string, unknown>).target_agent_slug as string}
+                      </Badge>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -277,6 +429,7 @@ export default function ToolsPage() {
                   <SelectItem value="http_api">HTTP API</SelectItem>
                   <SelectItem value="supabase_rpc">Supabase RPC</SelectItem>
                   <SelectItem value="internal">Internal</SelectItem>
+                  <SelectItem value="handoff">Agent Handoff</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -290,8 +443,230 @@ export default function ToolsPage() {
                 data-testid="input-tool-description"
               />
             </div>
+            {/* MCP Server specific fields */}
+            {formData.type === "mcp_server" && (
+              <div className="space-y-4 p-4 rounded-lg border bg-muted/30">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Server className="h-4 w-4" />
+                  MCP Server Configuration
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="mcp_url">MCP Endpoint URL *</Label>
+                  <Input
+                    id="mcp_url"
+                    value={mcpUrl}
+                    onChange={(e) => setMcpUrl(e.target.value)}
+                    placeholder="https://your-mcp-server.com/mcp"
+                    data-testid="input-mcp-url"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="mcp_api_key">API Key (optional)</Label>
+                  <Input
+                    id="mcp_api_key"
+                    type="password"
+                    value={mcpApiKey}
+                    onChange={(e) => setMcpApiKey(e.target.value)}
+                    placeholder="Bearer token for authentication"
+                    data-testid="input-mcp-api-key"
+                  />
+                </div>
+                
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handleVerifyMcp}
+                  disabled={!mcpUrl || verifying}
+                  className="w-full"
+                  data-testid="button-verify-mcp"
+                >
+                  {verifying ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Verifying...
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="h-4 w-4" />
+                      Verify & Discover Tools
+                    </>
+                  )}
+                </Button>
+                
+                {/* Verification Result */}
+                {verifyResult && (
+                  <div className={`p-3 rounded-md text-sm ${
+                    verifyResult.success 
+                      ? "bg-green-500/10 border border-green-500/20" 
+                      : "bg-red-500/10 border border-red-500/20"
+                  }`}>
+                    <div className="flex items-center gap-2 font-medium mb-2">
+                      {verifyResult.success ? (
+                        <>
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                          <span className="text-green-600 dark:text-green-400">Connected</span>
+                          {verifyResult.latency_ms && (
+                            <span className="text-muted-foreground font-normal">({verifyResult.latency_ms}ms)</span>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="h-4 w-4 text-red-500" />
+                          <span className="text-red-600 dark:text-red-400">Failed</span>
+                        </>
+                      )}
+                    </div>
+                    
+                    {verifyResult.success && verifyResult.tools && (
+                      <div className="space-y-1">
+                        <p className="text-muted-foreground">
+                          Discovered {verifyResult.tools.length} tool(s):
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {verifyResult.tools.map((t) => (
+                            <Badge key={t.name} variant="outline" className="text-xs">
+                              {t.name}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {verifyResult.error && (
+                      <p className="text-red-600 dark:text-red-400">{verifyResult.error}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Handoff specific fields */}
+            {formData.type === "handoff" && (
+              <div className="space-y-4 p-4 rounded-lg border bg-muted/30">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <ArrowRightLeft className="h-4 w-4" />
+                  Agent Handoff Configuration
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="target_agent">Target Agent *</Label>
+                  <Select value={targetAgentId} onValueChange={setTargetAgentId}>
+                    <SelectTrigger data-testid="select-target-agent">
+                      <SelectValue placeholder="Select agent to hand off to" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {agents.map((agent) => (
+                        <SelectItem key={agent.id} value={agent.id}>
+                          {agent.name} ({agent.slug})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="handoff_instructions">Handoff Instructions</Label>
+                  <textarea
+                    id="handoff_instructions"
+                    value={handoffInstructions}
+                    onChange={(e) => setHandoffInstructions(e.target.value)}
+                    placeholder="Additional context or instructions for the target agent..."
+                    className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    data-testid="input-handoff-instructions"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Context Variables</Label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addContextVariable}
+                      data-testid="button-add-context-var"
+                    >
+                      <Plus className="h-3 w-3 mr-1" />
+                      Add Variable
+                    </Button>
+                  </div>
+                  
+                  {contextVariables.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No context variables defined. Add variables that the LLM must extract for the handoff.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {contextVariables.map((variable, index) => (
+                        <div key={index} className="p-3 rounded-md border bg-background space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-medium text-muted-foreground">Variable {index + 1}</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeContextVariable(index)}
+                              className="h-6 w-6 p-0"
+                              data-testid={`button-remove-var-${index}`}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-2">
+                            <Input
+                              placeholder="Variable name"
+                              value={variable.name}
+                              onChange={(e) => updateContextVariable(index, "name", e.target.value)}
+                              data-testid={`input-var-name-${index}`}
+                            />
+                            <Select
+                              value={variable.type}
+                              onValueChange={(v) => updateContextVariable(index, "type", v)}
+                            >
+                              <SelectTrigger data-testid={`select-var-type-${index}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="string">String</SelectItem>
+                                <SelectItem value="number">Number</SelectItem>
+                                <SelectItem value="boolean">Boolean</SelectItem>
+                                <SelectItem value="object">Object</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          
+                          <Input
+                            placeholder="Description (shown to LLM)"
+                            value={variable.description}
+                            onChange={(e) => updateContextVariable(index, "description", e.target.value)}
+                            data-testid={`input-var-description-${index}`}
+                          />
+                          
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              id={`required-${index}`}
+                              checked={variable.required}
+                              onCheckedChange={(checked) => updateContextVariable(index, "required", !!checked)}
+                              data-testid={`checkbox-var-required-${index}`}
+                            />
+                            <Label htmlFor={`required-${index}`} className="text-sm">Required</Label>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            
+            {formData.type !== "handoff" && (
             <div className="space-y-2">
-              <Label htmlFor="config">Configuration (JSON)</Label>
+              <Label htmlFor="config">
+                {formData.type === "mcp_server" ? "Configuration (auto-populated)" : "Configuration (JSON)"}
+              </Label>
               <textarea
                 id="config"
                 value={formData.config}
@@ -301,12 +676,17 @@ export default function ToolsPage() {
                 data-testid="input-tool-config"
               />
             </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="button-cancel">
               Cancel
             </Button>
-            <Button onClick={handleSave} disabled={saving || !formData.name} data-testid="button-save">
+            <Button 
+              onClick={handleSave} 
+              disabled={saving || !formData.name || (formData.type === "handoff" && !targetAgentId)} 
+              data-testid="button-save"
+            >
               <Save className="h-4 w-4" />
               {saving ? "Saving..." : editingTool ? "Update Tool" : "Add Tool"}
             </Button>
