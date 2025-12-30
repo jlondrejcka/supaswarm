@@ -12,6 +12,29 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Helper to invoke edge functions with proper auth (from within edge function)
+async function invokeProcessTask(taskId: string): Promise<void> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/process-task`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${serviceRoleKey}`,
+      },
+      body: JSON.stringify({ task_id: taskId }),
+    });
+    
+    if (!response.ok) {
+      console.error("[MAIN] Task invoke failed", { task_id: taskId, status: response.status });
+    }
+  } catch (err) {
+    console.error("[MAIN] Task invoke error", { task_id: taskId, error: err });
+  }
+}
+
 // Built-in tool definitions for parallel coordination
 function getCreateAggregatorTaskToolDefinition(): LLMToolDefinition {
   return {
@@ -594,9 +617,7 @@ Deno.serve(async (req) => {
               });
               
               // Fire and forget - trigger task processing
-              supabase.functions.invoke("process-task", {
-                body: { task_id: newTask.id },
-              }).catch(err => {
+              invokeProcessTask(newTask.id).catch(err => {
                 console.error("[MAIN] Failed to trigger parallel task:", err);
               });
               
@@ -760,9 +781,7 @@ Deno.serve(async (req) => {
                   toolResult = `Handed off to ${targetAgent.name}`;
                   
                   // Trigger new task processing (fire and forget)
-                  supabase.functions.invoke("process-task", {
-                    body: { task_id: newTask.id },
-                  }).catch(err => {
+                  invokeProcessTask(newTask.id).catch(err => {
                     console.error("[MAIN] Failed to trigger handoff task:", err);
                   });
                 }
