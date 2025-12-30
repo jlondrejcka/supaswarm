@@ -1,10 +1,11 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
-import type { Tool, Agent, LLMProvider, LLMToolDefinition, ToolCall, TaskContext } from "./types.ts";
+import type { Tool, Agent, LLMProvider, LLMToolDefinition, ToolCall, TaskContext, Skill } from "./types.ts";
 import { executeMcpTool, getMcpUrl, hasPreDefinedTools } from "./mcp-client.ts";
 import { callLLM, synthesizeResponse, getVaultKeyName, ConversationMessage } from "./llm-providers.ts";
 import { createTaskLogger } from "./task-logger.ts";
+import { fetchAgentSkills, getSkillListForPrompt, getLoadSkillToolDefinition, loadSkill } from "./skill-loader.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -186,6 +187,16 @@ Deno.serve(async (req) => {
       { step: "tools_loaded", tool_count: tools.length },
     );
 
+    // Fetch skills
+    const skills: Skill[] = await fetchAgentSkills(supabase, agent.id);
+
+    await logger.logStatusChange(
+      skills.length > 0
+        ? `Loaded ${skills.length} skill(s): ${skills.map(s => s.name).join(", ")}`
+        : "No skills assigned",
+      { step: "skills_loaded", skill_count: skills.length },
+    );
+
     // Fetch provider
     let provider: LLMProvider | null = null;
     if (agent.provider_id) {
@@ -295,6 +306,20 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Add load_skill tool if agent has skills (and no conflict with existing tools)
+    if (skills.length > 0) {
+      const hasLoadSkillTool = toolDefinitions.some(t => t.function.name === "load_skill");
+      if (!hasLoadSkillTool) {
+        toolDefinitions.push(getLoadSkillToolDefinition());
+        console.log("[MAIN] Added load_skill tool for skills", {
+          skill_count: skills.length,
+          skill_ids: skills.map(s => s.skill_id),
+        });
+      } else {
+        console.log("[MAIN] Skipped load_skill tool - already exists in definitions");
+      }
+    }
+
     console.log("[MAIN] Tool definitions built", {
       count: toolDefinitions.length,
       names: toolDefinitions.map(t => t.function.name),
@@ -332,6 +357,15 @@ Deno.serve(async (req) => {
           context_keys: Object.keys(taskContext).filter(k => !k.startsWith("_")),
         });
       }
+    }
+
+    // Add available skills to system prompt
+    if (skills.length > 0) {
+      systemPrompt = `${systemPrompt}\n\n## Available Skills\n${getSkillListForPrompt(skills)}`;
+      console.log("[MAIN] Added skills to system prompt", {
+        skill_count: skills.length,
+        skill_ids: skills.map(s => s.skill_id),
+      });
     }
 
     await logger.logThinking("Calling LLM...", {
@@ -387,6 +421,31 @@ Deno.serve(async (req) => {
         await logger.logToolCall(toolName, toolCall.id, toolArgs);
 
         let toolResult = "";
+
+        // Handle load_skill pseudo-tool
+        if (toolName === "load_skill") {
+          const skillId = toolArgs.skill_id as string;
+          const skill = await loadSkill(supabase, skillId);
+          
+          if (skill) {
+            await logger.logSkillLoad(skill.name, skill.skill_id, skill.instructions);
+            toolResult = skill.instructions || `Skill "${skill.name}" has no instructions defined.`;
+            console.log("[MAIN] Skill loaded", {
+              skill_id: skillId,
+              skill_name: skill.name,
+              instructions_length: skill.instructions?.length || 0,
+            });
+          } else {
+            toolResult = `Skill not found: ${skillId}`;
+            console.log("[MAIN] Skill not found", { skill_id: skillId });
+          }
+          
+          const duration = Date.now() - toolCallStart;
+          await logger.logToolResult(toolName, toolCall.id, toolResult, !!skill, duration);
+          toolResults.push(toolResult);
+          continue;
+        }
+
         const [toolSlug, mcpFunctionName] = toolName.includes("__")
           ? toolName.split("__")
           : [toolName, null];

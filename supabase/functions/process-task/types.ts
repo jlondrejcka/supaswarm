@@ -50,6 +50,18 @@ export interface Agent {
   model: string | null;
 }
 
+export interface Skill {
+  id: string;
+  skill_id: string;
+  name: string;
+  description: string;
+  instructions: string | null;
+  metadata: Record<string, unknown> | null;
+  resources: Record<string, unknown> | null;
+  version: string | null;
+  is_active: boolean;
+}
+
 export interface LLMProvider {
   id: string;
   name: string;

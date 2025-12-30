@@ -56,7 +56,7 @@ export default function Dashboard() {
           supabase.from("agents").select("*"),
           supabase.from("tools").select("*"),
           supabase.from("skills").select("*"),
-          supabase.from("task_messages").select("content, task_id").eq("type", "skill_load"),
+          supabase.from("task_messages").select("metadata, task_id").eq("type", "skill_load").not("metadata->skill_name", "is", null),
           supabase.from("task_messages").select("metadata, task_id").eq("type", "tool_call")
         ])
 
@@ -92,8 +92,8 @@ export default function Dashboard() {
         // Build skill leaderboard - count completed tasks where skill was used
         const completedTaskIds = new Set(taskList.filter(t => t.status === 'completed').map(t => t.id))
         const skillTaskSets: Record<string, Set<string>> = {}
-        ;(skillMessages || []).forEach((msg: { content: { skill_name?: string }; task_id?: string }) => {
-          const skillName = msg.content?.skill_name
+        ;(skillMessages || []).forEach((msg: { metadata: { skill_name?: string }; task_id?: string }) => {
+          const skillName = msg.metadata?.skill_name
           const taskId = msg.task_id
           // Only count if task completed successfully
           if (skillName && taskId && completedTaskIds.has(taskId)) {

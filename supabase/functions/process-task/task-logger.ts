@@ -5,6 +5,7 @@ export type MessageType =
   | "assistant_message"
   | "tool_call"
   | "tool_result"
+  | "skill_load"
   | "thinking"
   | "status_change"
   | "error"
@@ -152,6 +153,22 @@ export function createTaskLogger(
   }
 
   /**
+   * Log skill load
+   */
+  async function logSkillLoad(
+    skillName: string,
+    skillId: string,
+    instructions: string | null,
+  ): Promise<void> {
+    await log("skill_load", `Loaded skill: ${skillName}`, {
+      skill_name: skillName,
+      skill_id: skillId,
+      instructions_length: instructions?.length || 0,
+      step: "skill_loaded",
+    });
+  }
+
+  /**
    * Log thinking/status
    */
   async function logThinking(
@@ -240,6 +257,7 @@ export function createTaskLogger(
     logAssistantMessage,
     logToolCall,
     logToolResult,
+    logSkillLoad,
     logThinking,
     logStatusChange,
     logError,
