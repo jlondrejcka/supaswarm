@@ -1,8 +1,33 @@
 {
-  "name": "rest-express",
-  "version": "1.0.0",
+  "name": "supaswarm",
+  "version": "2.0.0",
+  "description": "A Supabase-native multi-agent orchestration platform for building observable and governed agentic workflows",
   "type": "module",
   "license": "MIT",
+  "author": {
+    "name": "Joe Ondrejcka",
+    "email": "joe@cloudbeast.io"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jlondrejcka/supaswarm.git"
+  },
+  "keywords": [
+    "supabase",
+    "ai-agents",
+    "multi-agent",
+    "orchestration",
+    "llm",
+    "openai",
+    "anthropic",
+    "claude",
+    "gpt",
+    "nextjs"
+  ],
+  "homepage": "https://github.com/jlondrejcka/supaswarm#readme",
+  "bugs": {
+    "url": "https://github.com/jlondrejcka/supaswarm/issues"
+  },
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
