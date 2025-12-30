@@ -253,6 +253,26 @@ export default function AgentsPage() {
     }
   }
 
+  async function toggleAgentActive(agentId: string, currentActive: boolean, isDefault: boolean) {
+    if (!supabase) return
+    
+    // Can't deactivate the default agent
+    if (currentActive && isDefault) {
+      alert("Cannot deactivate the default agent. Set another agent as default first.")
+      return
+    }
+    
+    try {
+      await supabase
+        .from("agents")
+        .update({ is_active: !currentActive })
+        .eq("id", agentId)
+      await fetchData()
+    } catch (error) {
+      console.error("Failed to toggle agent status:", error)
+    }
+  }
+
   if (!isSupabaseConfigured) {
     return <SetupRequired />
   }
@@ -297,10 +317,7 @@ export default function AgentsPage() {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {agents.map((agent) => {
-            const toolCount = agentTools[agent.id]?.length || 0
-            const skillCount = agentSkills[agent.id]?.length || 0
-            return (
+          {agents.map((agent) => (
               <Card key={agent.id} className={`hover:bg-accent/50 transition-colors cursor-pointer ${agent.is_default ? 'ring-2 ring-primary' : ''}`} onClick={() => openEditDialog(agent)}>
                 <CardHeader className="pb-2">
                   <div className="flex items-start justify-between gap-2">
@@ -310,16 +327,23 @@ export default function AgentsPage() {
                         {agent.name}
                       </CardTitle>
                     </div>
-                    <div className="flex items-center gap-1 flex-wrap">
+                    <div className="flex items-center gap-2 flex-wrap">
                       {agent.is_default && (
                         <Badge className="gap-1 bg-primary">
                           <Star className="h-3 w-3" />
                           Default
                         </Badge>
                       )}
-                      <Badge variant={agent.is_active ? "default" : "secondary"}>
-                        {agent.is_active ? "Active" : "Inactive"}
-                      </Badge>
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <Switch
+                          checked={agent.is_active ?? false}
+                          onCheckedChange={() => toggleAgentActive(agent.id, agent.is_active ?? false, agent.is_default ?? false)}
+                          data-testid={`switch-agent-active-${agent.id}`}
+                        />
+                        <span className={`text-xs ${agent.is_active ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                          {agent.is_active ? "Active" : "Inactive"}
+                        </span>
+                      </div>
                     </div>
                   </div>
                   <CardDescription className="line-clamp-2">
@@ -341,19 +365,25 @@ export default function AgentsPage() {
                       </Button>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 mt-2 flex-wrap">
-                    {toolCount > 0 && (
-                      <Badge variant="outline" className="gap-1">
-                        <Wrench className="h-3 w-3" />
-                        {toolCount} tool{toolCount !== 1 ? "s" : ""}
-                      </Badge>
-                    )}
-                    {skillCount > 0 && (
-                      <Badge variant="outline" className="gap-1">
-                        <Zap className="h-3 w-3" />
-                        {skillCount} skill{skillCount !== 1 ? "s" : ""}
-                      </Badge>
-                    )}
+                  <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                    {agentSkills[agent.id]?.map((skillId) => {
+                      const skill = skills.find(s => s.id === skillId)
+                      return skill ? (
+                        <Badge key={skillId} className="gap-1 bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20">
+                          <Zap className="h-3 w-3" />
+                          {skill.name}
+                        </Badge>
+                      ) : null
+                    })}
+                    {agentTools[agent.id]?.map((toolId) => {
+                      const tool = tools.find(t => t.id === toolId)
+                      return tool ? (
+                        <Badge key={toolId} className="gap-1 bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30 hover:bg-blue-500/20">
+                          <Wrench className="h-3 w-3" />
+                          {tool.name}
+                        </Badge>
+                      ) : null
+                    })}
                   </div>
                   {agent.model && (
                     <p className="text-xs text-muted-foreground mt-2">
@@ -363,7 +393,7 @@ export default function AgentsPage() {
                 </CardContent>
               </Card>
             )
-          })}
+          )}
         </div>
       )}
 
@@ -532,43 +562,10 @@ export default function AgentsPage() {
             </div>
 
             <Accordion type="multiple" className="w-full">
-              <AccordionItem value="tools">
-                <AccordionTrigger className="text-sm">
-                  <div className="flex items-center gap-2">
-                    <Wrench className="h-4 w-4" />
-                    Tools ({selectedTools.length} selected)
-                  </div>
-                </AccordionTrigger>
-                <AccordionContent>
-                  {tools.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No tools available. Create tools first.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {tools.map((tool) => (
-                        <div key={tool.id} className="flex items-center gap-2">
-                          <Checkbox
-                            id={`tool-${tool.id}`}
-                            checked={selectedTools.includes(tool.id)}
-                            onCheckedChange={() => toggleTool(tool.id)}
-                            data-testid={`checkbox-tool-${tool.id}`}
-                          />
-                          <label htmlFor={`tool-${tool.id}`} className="text-sm cursor-pointer flex-1">
-                            {tool.name}
-                            {tool.description && (
-                              <span className="text-muted-foreground ml-1">- {tool.description}</span>
-                            )}
-                          </label>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </AccordionContent>
-              </AccordionItem>
-
               <AccordionItem value="skills">
                 <AccordionTrigger className="text-sm">
                   <div className="flex items-center gap-2">
-                    <Zap className="h-4 w-4" />
+                    <Zap className="h-4 w-4 text-amber-500" />
                     Skills ({selectedSkills.length} selected)
                   </div>
                 </AccordionTrigger>
@@ -589,6 +586,39 @@ export default function AgentsPage() {
                             {skill.name}
                             {skill.description && (
                               <span className="text-muted-foreground ml-1">- {skill.description}</span>
+                            )}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </AccordionContent>
+              </AccordionItem>
+
+              <AccordionItem value="tools">
+                <AccordionTrigger className="text-sm">
+                  <div className="flex items-center gap-2">
+                    <Wrench className="h-4 w-4 text-blue-500" />
+                    Tools ({selectedTools.length} selected)
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  {tools.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No tools available. Create tools first.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {tools.map((tool) => (
+                        <div key={tool.id} className="flex items-center gap-2">
+                          <Checkbox
+                            id={`tool-${tool.id}`}
+                            checked={selectedTools.includes(tool.id)}
+                            onCheckedChange={() => toggleTool(tool.id)}
+                            data-testid={`checkbox-tool-${tool.id}`}
+                          />
+                          <label htmlFor={`tool-${tool.id}`} className="text-sm cursor-pointer flex-1">
+                            {tool.name}
+                            {tool.description && (
+                              <span className="text-muted-foreground ml-1">- {tool.description}</span>
                             )}
                           </label>
                         </div>

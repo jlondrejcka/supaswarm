@@ -17,11 +17,14 @@ import {
 } from "@/components/ui/dialog"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
-import type { Skill } from "@/lib/supabase-types"
-import { Plus, Zap, Save } from "lucide-react"
+import type { Skill, Agent } from "@/lib/supabase-types"
+import { Plus, Zap, Save, Bot } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
 
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([])
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [skillAgents, setSkillAgents] = useState<Record<string, string[]>>({})
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null)
@@ -35,25 +38,38 @@ export default function SkillsPage() {
   })
 
   useEffect(() => {
-    fetchSkills()
+    fetchData()
   }, [])
 
-  async function fetchSkills() {
+  async function fetchData() {
     if (!supabase) {
       setLoading(false)
       return
     }
     
     try {
-      const { data, error } = await supabase
-        .from("skills")
-        .select("*")
-        .order("created_at", { ascending: false })
+      const [
+        { data: skillsData },
+        { data: agentsData },
+        { data: agentSkillsData }
+      ] = await Promise.all([
+        supabase.from("skills").select("*").order("created_at", { ascending: false }),
+        supabase.from("agents").select("*"),
+        supabase.from("agent_skills").select("*")
+      ])
 
-      if (error) throw error
-      setSkills(data || [])
+      setSkills(skillsData || [])
+      setAgents(agentsData || [])
+      
+      // Map skill_id -> array of agent_ids
+      const skillsMap: Record<string, string[]> = {}
+      agentSkillsData?.forEach((as: { agent_id: string; skill_id: string }) => {
+        if (!skillsMap[as.skill_id]) skillsMap[as.skill_id] = []
+        skillsMap[as.skill_id].push(as.agent_id)
+      })
+      setSkillAgents(skillsMap)
     } catch (error) {
-      console.error("Failed to fetch skills:", error)
+      console.error("Failed to fetch data:", error)
     } finally {
       setLoading(false)
     }
@@ -114,12 +130,38 @@ export default function SkillsPage() {
         if (error) throw error
       }
 
-      await fetchSkills()
+      await fetchData()
       setDialogOpen(false)
     } catch (error) {
       console.error("Failed to save skill:", error)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function toggleSkillActive(skillId: string, currentActive: boolean) {
+    if (!supabase) return
+    
+    // If trying to deactivate, check if used by active agents
+    if (currentActive) {
+      const activeAgentIds = skillAgents[skillId] || []
+      const activeAgentsUsingSkill = agents.filter(a => activeAgentIds.includes(a.id) && a.is_active)
+      
+      if (activeAgentsUsingSkill.length > 0) {
+        const agentNames = activeAgentsUsingSkill.map(a => a.name).join(", ")
+        alert(`Cannot deactivate: skill is used by active agent(s): ${agentNames}`)
+        return
+      }
+    }
+    
+    try {
+      await supabase
+        .from("skills")
+        .update({ is_active: !currentActive })
+        .eq("id", skillId)
+      await fetchData()
+    } catch (error) {
+      console.error("Failed to toggle skill status:", error)
     }
   }
 
@@ -177,9 +219,16 @@ export default function SkillsPage() {
                       {skill.name}
                     </CardTitle>
                   </div>
-                  <Badge variant={skill.is_active ? "default" : "secondary"}>
-                    {skill.is_active ? "Active" : "Inactive"}
-                  </Badge>
+                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <Switch
+                      checked={skill.is_active ?? false}
+                      onCheckedChange={() => toggleSkillActive(skill.id, skill.is_active ?? false)}
+                      data-testid={`switch-skill-active-${skill.id}`}
+                    />
+                    <span className={`text-xs ${skill.is_active ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                      {skill.is_active ? "Active" : "Inactive"}
+                    </span>
+                  </div>
                 </div>
                 <CardDescription className="line-clamp-2">
                   {skill.description}
@@ -192,6 +241,19 @@ export default function SkillsPage() {
                     <Badge variant="outline" className="text-xs">v{skill.version}</Badge>
                   )}
                 </div>
+                {skillAgents[skill.id]?.length > 0 && (
+                  <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                    {skillAgents[skill.id].map((agentId) => {
+                      const agent = agents.find(a => a.id === agentId)
+                      return agent ? (
+                        <Badge key={agentId} className="gap-1 bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/30 hover:bg-violet-500/20">
+                          <Bot className="h-3 w-3" />
+                          {agent.name}
+                        </Badge>
+                      ) : null
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
           ))}

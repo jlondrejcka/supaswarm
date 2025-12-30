@@ -25,8 +25,8 @@ const navItems = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/tasks", icon: ListTodo, label: "Tasks" },
   { href: "/agents", icon: Bot, label: "Agents" },
-  { href: "/tools", icon: Wrench, label: "Tools" },
   { href: "/skills", icon: Zap, label: "Skills" },
+  { href: "/tools", icon: Wrench, label: "Tools" },
   { href: "/reviews", icon: Users, label: "Reviews" },
 ]
 

@@ -25,8 +25,9 @@ import {
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { Tool, ToolType, Agent, HandoffContextVariable, Json } from "@/lib/supabase-types"
-import { Plus, Wrench, Globe, Server, Database, Save, Zap, CheckCircle, XCircle, Loader2, ArrowRightLeft, Trash2 } from "lucide-react"
+import { Plus, Wrench, Globe, Server, Database, Save, Zap, CheckCircle, XCircle, Loader2, ArrowRightLeft, Trash2, Bot } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
 
 const toolTypeIcons: Record<ToolType, typeof Wrench> = {
   internal: Wrench,
@@ -73,6 +74,7 @@ export default function ToolsPage() {
   
   // Handoff configuration state
   const [agents, setAgents] = useState<Agent[]>([])
+  const [toolAgents, setToolAgents] = useState<Record<string, string[]>>({})
   const [targetAgentId, setTargetAgentId] = useState("")
   const [handoffInstructions, setHandoffInstructions] = useState("")
   const [contextVariables, setContextVariables] = useState<HandoffContextVariable[]>([])
@@ -107,14 +109,23 @@ export default function ToolsPage() {
     if (!supabase) return
     
     try {
-      const { data, error } = await supabase
-        .from("agents")
-        .select("*")
-        .eq("is_active", true)
-        .order("name")
+      const [
+        { data: agentsData },
+        { data: agentToolsData }
+      ] = await Promise.all([
+        supabase.from("agents").select("*").eq("is_active", true).order("name"),
+        supabase.from("agent_tools").select("*")
+      ])
 
-      if (error) throw error
-      setAgents(data || [])
+      setAgents(agentsData || [])
+      
+      // Map tool_id -> array of agent_ids
+      const toolsMap: Record<string, string[]> = {}
+      agentToolsData?.forEach((at: { agent_id: string; tool_id: string }) => {
+        if (!toolsMap[at.tool_id]) toolsMap[at.tool_id] = []
+        toolsMap[at.tool_id].push(at.agent_id)
+      })
+      setToolAgents(toolsMap)
     } catch (error) {
       console.error("Failed to fetch agents:", error)
     }
@@ -290,6 +301,32 @@ export default function ToolsPage() {
     setContextVariables(contextVariables.filter((_, i) => i !== index))
   }
 
+  async function toggleToolActive(toolId: string, currentActive: boolean) {
+    if (!supabase) return
+    
+    // If trying to deactivate, check if used by active agents
+    if (currentActive) {
+      const activeAgentIds = toolAgents[toolId] || []
+      const activeAgentsUsingTool = agents.filter(a => activeAgentIds.includes(a.id) && a.is_active)
+      
+      if (activeAgentsUsingTool.length > 0) {
+        const agentNames = activeAgentsUsingTool.map(a => a.name).join(", ")
+        alert(`Cannot deactivate: tool is used by active agent(s): ${agentNames}`)
+        return
+      }
+    }
+    
+    try {
+      await supabase
+        .from("tools")
+        .update({ is_active: !currentActive })
+        .eq("id", toolId)
+      await fetchTools()
+    } catch (error) {
+      console.error("Failed to toggle tool status:", error)
+    }
+  }
+
   if (!isSupabaseConfigured) {
     return <SetupRequired />
   }
@@ -381,9 +418,16 @@ export default function ToolsPage() {
                         {tool.name}
                       </CardTitle>
                     </div>
-                    <Badge variant={tool.is_active ? "default" : "secondary"}>
-                      {tool.is_active ? "Active" : "Inactive"}
-                    </Badge>
+                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                      <Switch
+                        checked={tool.is_active ?? false}
+                        onCheckedChange={() => toggleToolActive(tool.id, tool.is_active ?? false)}
+                        data-testid={`switch-tool-active-${tool.id}`}
+                      />
+                      <span className={`text-xs ${tool.is_active ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                        {tool.is_active ? "Active" : "Inactive"}
+                      </span>
+                    </div>
                   </div>
                   <CardDescription className="line-clamp-2">
                     {tool.description || "No description"}
@@ -398,7 +442,7 @@ export default function ToolsPage() {
                     {tool.type === "mcp_server" && (tool.config as Record<string, unknown>)?.tools && Array.isArray((tool.config as Record<string, unknown>).tools) ? (
                       <Badge variant="secondary" className="text-xs">
                         <CheckCircle className="h-3 w-3 mr-1" />
-                        {((tool.config as Record<string, unknown>).tools as unknown[]).length} tools
+                        {((tool.config as Record<string, unknown>).tools as unknown[]).length} MCP tools
                       </Badge>
                     ) : null}
                     {tool.type === "handoff" && (tool.config as Record<string, unknown>)?.target_agent_slug ? (
@@ -408,6 +452,29 @@ export default function ToolsPage() {
                       </Badge>
                     ) : null}
                   </div>
+                  {tool.type === "mcp_server" && (tool.config as Record<string, unknown>)?.tools && Array.isArray((tool.config as Record<string, unknown>).tools) && (
+                    <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                      {((tool.config as Record<string, unknown>).tools as Array<{name: string; description?: string}>).map((mcpTool) => (
+                        <Badge key={mcpTool.name} variant="outline" className="text-xs gap-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
+                          <Wrench className="h-2.5 w-2.5" />
+                          {mcpTool.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  {toolAgents[tool.id]?.length > 0 && (
+                    <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                      {toolAgents[tool.id].map((agentId) => {
+                        const agent = agents.find(a => a.id === agentId)
+                        return agent ? (
+                          <Badge key={agentId} className="gap-1 bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/30 hover:bg-violet-500/20">
+                            <Bot className="h-3 w-3" />
+                            {agent.name}
+                          </Badge>
+                        ) : null
+                      })}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )
