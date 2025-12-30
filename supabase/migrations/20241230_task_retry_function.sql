@@ -200,3 +200,5 @@ GRANT EXECUTE ON FUNCTION public.retry_task TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.retry_parallel_group TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.retry_tasks_by_status TO authenticated, service_role;
 
+
+

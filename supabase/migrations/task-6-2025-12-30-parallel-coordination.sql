@@ -74,3 +74,5 @@ EXECUTE FUNCTION check_aggregator_dependencies();
 COMMENT ON COLUMN public.tasks.is_parallel_task IS 'Flag indicating this task is part of a parallel execution group';
 COMMENT ON COLUMN public.tasks.dependent_task_ids IS 'Array of task IDs this aggregator task depends on (waits for completion)';
 
+
+
