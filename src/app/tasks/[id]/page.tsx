@@ -23,6 +23,7 @@ export default function TaskDetailPage() {
   const [task, setTask] = useState<Task | null>(null)
   const [subtasks, setSubtasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
+  const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
     fetchTask()
@@ -94,6 +95,44 @@ export default function TaskDetailPage() {
     }
   }
 
+  async function handleRetry() {
+    if (!supabase || !taskId) return
+    setRetrying(true)
+
+    try {
+      // Use the retry_task RPC function
+      const { data: result, error: rpcError } = await supabase.rpc("retry_task", {
+        p_task_id: taskId,
+        p_clear_output: false
+      })
+
+      if (rpcError) {
+        console.error("RPC error:", rpcError)
+        return
+      }
+
+      if (!result?.success) {
+        console.error("Retry failed:", result?.error)
+        return
+      }
+
+      // Trigger task processing
+      await supabase.functions.invoke("process-task", {
+        body: { task_id: taskId }
+      })
+
+      // Refresh task data
+      await fetchTask()
+    } catch (error) {
+      console.error("Failed to retry task:", error)
+    } finally {
+      setRetrying(false)
+    }
+  }
+
+  // Check if task can be retried
+  const canRetry = task?.status && ['failed', 'needs_human_review', 'cancelled'].includes(task.status)
+
   if (!isSupabaseConfigured) {
     return <SetupRequired />
   }
@@ -158,9 +197,23 @@ export default function TaskDetailPage() {
             </p>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { fetchTask(); fetchSubtasks(); }} data-testid="button-refresh">
-          <RefreshCw className="h-4 w-4" />
-        </Button>
+        <div className="flex gap-2">
+          {canRetry && (
+            <Button 
+              variant="default" 
+              size="sm" 
+              onClick={handleRetry}
+              disabled={retrying}
+              data-testid="button-retry"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${retrying ? 'animate-spin' : ''}`} />
+              {retrying ? 'Retrying...' : 'Retry'}
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={() => { fetchTask(); fetchSubtasks(); }} data-testid="button-refresh">
+            <RefreshCw className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

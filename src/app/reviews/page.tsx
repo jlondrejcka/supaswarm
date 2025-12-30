@@ -93,27 +93,26 @@ export default function ReviewsPage() {
     return response.error || "Unknown error"
   }
 
-  // Handle retry action
-  async function handleRetry(taskId: string, reviewId: string | null) {
+  // Handle retry action using database function
+  async function handleRetry(taskId: string, _reviewId: string | null) {
     if (!supabase) return
     setActionLoading(taskId)
     
     try {
-      // Update task status back to pending
-      await supabase
-        .from("tasks")
-        .update({ status: "pending" })
-        .eq("id", taskId)
+      // Use the retry_task RPC function
+      const { data: result, error: rpcError } = await supabase.rpc("retry_task", {
+        p_task_id: taskId,
+        p_clear_output: false
+      })
       
-      // Update human review if exists
-      if (reviewId) {
-        await supabase
-          .from("human_reviews")
-          .update({ 
-            approved: true, 
-            comments: "Retrying task" 
-          })
-          .eq("id", reviewId)
+      if (rpcError) {
+        console.error("RPC error:", rpcError)
+        return
+      }
+      
+      if (!result?.success) {
+        console.error("Retry failed:", result?.error)
+        return
       }
       
       // Trigger task processing
