@@ -302,4 +302,3 @@ When a handoff occurs, context is merged:
 - Edge Function changes are local only - need to deploy via:
   - Supabase CLI: `npx supabase functions deploy process-task --project-ref bgqxccmdcpegvbuxmnrf`
   - Or via Supabase Dashboard: Edge Functions > process-task > Deploy
-
