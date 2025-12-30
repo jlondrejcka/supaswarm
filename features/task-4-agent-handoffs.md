@@ -283,3 +283,23 @@ When a handoff occurs, context is merged:
   - Previously, handoff tasks were created server-side but UI didn't track them
   - Now UI automatically picks up new tasks in same conversation and displays their messages
 
+### 2025-12-30
+
+**Bug investigation & fix:**
+- Issue: Handoff tasks stuck in `pending` status
+- Root cause analysis:
+  1. `invokeProcessTask()` function calling itself via fetch with service role key was failing 401
+  2. This duplicate invocation was unnecessary - queue trigger + cron already handles new tasks
+- Fix: Removed `invokeProcessTask()` function and all calls to it
+  - Parallel tasks now rely on queue trigger + cron (correct behavior)
+  - Handoff tasks now rely on queue trigger + cron (correct behavior)
+- Changes made to `supabase/functions/process-task/index.ts`:
+  - Removed `invokeProcessTask()` function definition (lines 17-37)
+  - Removed call in parallel task creation (line 647)  
+  - Removed call in handoff task creation (line 811)
+
+**DEPLOYMENT NEEDED:**
+- Edge Function changes are local only - need to deploy via:
+  - Supabase CLI: `npx supabase functions deploy process-task --project-ref bgqxccmdcpegvbuxmnrf`
+  - Or via Supabase Dashboard: Edge Functions > process-task > Deploy
+

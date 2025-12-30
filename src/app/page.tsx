@@ -92,8 +92,9 @@ export default function Dashboard() {
         // Build skill leaderboard - count completed tasks where skill was used
         const completedTaskIds = new Set(taskList.filter(t => t.status === 'completed').map(t => t.id))
         const skillTaskSets: Record<string, Set<string>> = {}
-        ;(skillMessages || []).forEach((msg: { metadata: { skill_name?: string }; task_id?: string }) => {
-          const skillName = msg.metadata?.skill_name
+        ;(skillMessages || []).forEach((msg) => {
+          const metadata = msg.metadata as Record<string, unknown> | null
+          const skillName = metadata?.skill_name as string | undefined
           const taskId = msg.task_id
           // Only count if task completed successfully
           if (skillName && taskId && completedTaskIds.has(taskId)) {
@@ -108,8 +109,9 @@ export default function Dashboard() {
 
         // Build tool leaderboard from task_messages
         const toolCounts: Record<string, number> = {}
-        ;(toolMessages || []).forEach((msg: { metadata: { tool_name?: string } }) => {
-          const toolName = msg.metadata?.tool_name
+        ;(toolMessages || []).forEach((msg) => {
+          const metadata = msg.metadata as Record<string, unknown> | null
+          const toolName = metadata?.tool_name as string | undefined
           if (toolName) {
             // Clean up tool name (e.g. "exa-search__Exa_Search" -> "Exa Search")
             const cleanName = toolName.split("__").pop()?.replace(/_/g, " ") || toolName

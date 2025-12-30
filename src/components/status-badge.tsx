@@ -6,6 +6,10 @@ const statusConfig: Record<TaskStatus, { label: string; className: string }> = {
     label: "Pending",
     className: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
   },
+  queued: {
+    label: "Queued",
+    className: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400"
+  },
   running: {
     label: "Running",
     className: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"

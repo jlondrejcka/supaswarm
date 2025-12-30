@@ -110,8 +110,9 @@ export default function ReviewsPage() {
         return
       }
       
-      if (!result?.success) {
-        console.error("Retry failed:", result?.error)
+      const retryResult = result as { success?: boolean; error?: string } | null
+      if (!retryResult?.success) {
+        console.error("Retry failed:", retryResult?.error)
         return
       }
       

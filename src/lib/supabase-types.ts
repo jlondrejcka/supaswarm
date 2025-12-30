@@ -459,6 +459,50 @@ export type Database = {
           },
         ]
       }
+      task_messages: {
+        Row: {
+          id: string
+          task_id: string
+          parent_message_id: string | null
+          role: string
+          type: string
+          content: Json
+          metadata: Json
+          sequence_number: number
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          task_id: string
+          parent_message_id?: string | null
+          role: string
+          type: string
+          content: Json
+          metadata?: Json
+          sequence_number?: number
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          task_id?: string
+          parent_message_id?: string | null
+          role?: string
+          type?: string
+          content?: Json
+          metadata?: Json
+          sequence_number?: number
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_messages_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -477,6 +521,10 @@ export type Database = {
       pgmq_delete: {
         Args: { msg_id: number; queue_name: string }
         Returns: boolean
+      }
+      retry_task: {
+        Args: { p_task_id: string; p_clear_output?: boolean }
+        Returns: Json
       }
       upsert_vault_secret: {
         Args: {

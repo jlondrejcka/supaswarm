@@ -13,29 +13,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Helper to invoke edge functions with proper auth (from within edge function)
-async function invokeProcessTask(taskId: string): Promise<void> {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  
-  try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/process-task`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${serviceRoleKey}`,
-      },
-      body: JSON.stringify({ task_id: taskId }),
-    });
-    
-    if (!response.ok) {
-      console.error("[MAIN] Task invoke failed", { task_id: taskId, status: response.status });
-    }
-  } catch (err) {
-    console.error("[MAIN] Task invoke error", { task_id: taskId, error: err });
-  }
-}
-
 // Built-in tool definitions for parallel coordination
 function getCreateAggregatorTaskToolDefinition(): LLMToolDefinition {
   return {
@@ -643,11 +620,7 @@ Deno.serve(async (req) => {
                 is_parallel: true,
               });
               
-              // Fire and forget - trigger task processing
-              invokeProcessTask(newTask.id).catch(err => {
-                console.error("[MAIN] Failed to trigger parallel task:", err);
-              });
-              
+              // Task will be picked up by queue trigger + cron job
               toolResult = `Parallel task created. Task ID: ${newTask.id}`;
             }
           }
@@ -807,10 +780,7 @@ Deno.serve(async (req) => {
                   handoffExecuted = true;
                   toolResult = `Handed off to ${targetAgent.name}`;
                   
-                  // Trigger new task processing (fire and forget)
-                  invokeProcessTask(newTask.id).catch(err => {
-                    console.error("[MAIN] Failed to trigger handoff task:", err);
-                  });
+                  // Task will be picked up by queue trigger + cron job
                 }
               }
             } else if (tool.type === "mcp_server" && mcpFunctionName) {

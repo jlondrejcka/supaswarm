@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/select"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
-import type { Tool, ToolType, Agent, HandoffContextVariable } from "@/lib/supabase-types"
+import type { Tool, ToolType, Agent, HandoffContextVariable, Json } from "@/lib/supabase-types"
 import { Plus, Wrench, Globe, Server, Database, Save, Zap, CheckCircle, XCircle, Loader2, ArrowRightLeft, Trash2 } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 
@@ -247,7 +247,7 @@ export default function ToolsPage() {
         slug: formData.slug || generateSlug(formData.name),
         description: formData.description || null,
         type: formData.type,
-        config: configJson,
+        config: configJson as Json,
         is_active: true,
       }
 
@@ -395,20 +395,18 @@ export default function ToolsPage() {
                       {toolTypeLabels[tool.type as ToolType] || tool.type}
                     </Badge>
                     <span className="text-xs text-muted-foreground font-mono">{tool.slug}</span>
-                    {/* Show cached tools count for MCP servers */}
-                    {tool.type === "mcp_server" && (tool.config as Record<string, unknown>)?.tools && (
+                    {tool.type === "mcp_server" && (tool.config as Record<string, unknown>)?.tools && Array.isArray((tool.config as Record<string, unknown>).tools) ? (
                       <Badge variant="secondary" className="text-xs">
                         <CheckCircle className="h-3 w-3 mr-1" />
                         {((tool.config as Record<string, unknown>).tools as unknown[]).length} tools
                       </Badge>
-                    )}
-                    {/* Show target agent for handoff tools */}
-                    {tool.type === "handoff" && (tool.config as Record<string, unknown>)?.target_agent_slug && (
+                    ) : null}
+                    {tool.type === "handoff" && (tool.config as Record<string, unknown>)?.target_agent_slug ? (
                       <Badge variant="secondary" className="text-xs">
                         <ArrowRightLeft className="h-3 w-3 mr-1" />
                         → {(tool.config as Record<string, unknown>).target_agent_slug as string}
                       </Badge>
-                    )}
+                    ) : null}
                   </div>
                 </CardContent>
               </Card>
