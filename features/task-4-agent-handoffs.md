@@ -278,3 +278,8 @@ When a handoff occurs, context is merged:
 - Updated TypeScript types: HandoffToolConfig, TaskContext, MessageType
 - Deployed Edge Function v28
 
+**Bug fix:**
+- Fixed: Chat UI now subscribes to new task INSERTs for handoff tasks via master_task_id match
+  - Previously, handoff tasks were created server-side but UI didn't track them
+  - Now UI automatically picks up new tasks in same conversation and displays their messages
+

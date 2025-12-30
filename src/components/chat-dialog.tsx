@@ -159,6 +159,37 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
         {
           event: 'INSERT',
           schema: 'public',
+          table: 'tasks',
+        },
+        async (payload) => {
+          const newTask = payload.new as Task
+          // Check if this task belongs to our current conversation (handoff scenario)
+          if (newTask.master_task_id && newTask.master_task_id === conversationContext.masterTaskId) {
+            // This is a handoff task - add it to the UI
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `pending-${newTask.id}`,
+                role: "assistant",
+                content: "Processing...",
+                status: newTask.status,
+                taskId: newTask.id,
+                taskMessages: [],
+              },
+            ])
+            // Update lastTaskId to track the new task
+            setConversationContext((prev) => ({
+              ...prev,
+              lastTaskId: newTask.id,
+            }))
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
           table: 'task_messages',
         },
         (payload) => {
@@ -182,7 +213,7 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
     return () => {
       client.removeChannel(channel)
     }
-  }, [open])
+  }, [open, conversationContext.masterTaskId])
 
   async function fetchTaskMessages(taskId: string): Promise<TaskMessage[]> {
     if (!supabase) return []
