@@ -21,3 +21,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_context ON public.tasks USING gin (context)
 -- Comment for documentation
 COMMENT ON COLUMN public.tasks.context IS 'JSONB field storing context variables passed during agent handoffs. Includes _handoff_from, _handoff_tool, _handoff_instructions metadata.';
 
+
+
+
+
+
+

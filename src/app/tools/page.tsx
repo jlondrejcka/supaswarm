@@ -47,6 +47,7 @@ const toolTypeLabels: Record<ToolType, string> = {
 export default function ToolsPage() {
   const [tools, setTools] = useState<Tool[]>([])
   const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState<ToolType | "all">("all")
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTool, setEditingTool] = useState<Tool | null>(null)
   const [saving, setSaving] = useState(false)
@@ -293,6 +294,15 @@ export default function ToolsPage() {
     return <SetupRequired />
   }
 
+  const filteredTools = filter === "all" 
+    ? tools 
+    : tools.filter(t => t.type === filter)
+
+  const typeCounts = tools.reduce((acc, tool) => {
+    acc[tool.type as ToolType] = (acc[tool.type as ToolType] || 0) + 1
+    return acc
+  }, {} as Record<ToolType, number>)
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -304,6 +314,28 @@ export default function ToolsPage() {
           <Plus className="h-4 w-4" />
           Add Tool
         </Button>
+      </div>
+
+      <div className="flex gap-2 flex-wrap">
+        <Button
+          variant={filter === "all" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setFilter("all")}
+          data-testid="button-filter-all"
+        >
+          All ({tools.length})
+        </Button>
+        {(["mcp_server", "http_api", "supabase_rpc", "internal", "handoff"] as ToolType[]).map((type) => (
+          <Button
+            key={type}
+            variant={filter === type ? "default" : "outline"}
+            size="sm"
+            onClick={() => setFilter(type)}
+            data-testid={`button-filter-${type}`}
+          >
+            {toolTypeLabels[type]} ({typeCounts[type] || 0})
+          </Button>
+        ))}
       </div>
 
       {loading ? (
@@ -320,20 +352,24 @@ export default function ToolsPage() {
             </Card>
           ))}
         </div>
-      ) : tools.length === 0 ? (
+      ) : filteredTools.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center">
             <Wrench className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <p className="text-muted-foreground">No tools configured yet</p>
-            <Button className="mt-4" onClick={openCreateDialog} data-testid="button-create-first-tool">
-              <Plus className="h-4 w-4" />
-              Add Your First Tool
-            </Button>
+            <p className="text-muted-foreground">
+              {tools.length === 0 ? "No tools configured yet" : "No tools match the selected filter"}
+            </p>
+            {tools.length === 0 && (
+              <Button className="mt-4" onClick={openCreateDialog} data-testid="button-create-first-tool">
+                <Plus className="h-4 w-4" />
+                Add Your First Tool
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {tools.map((tool) => {
+          {filteredTools.map((tool) => {
             const Icon = toolTypeIcons[tool.type as ToolType] || Wrench
             return (
               <Card key={tool.id} className="hover:bg-accent/50 transition-colors cursor-pointer" onClick={() => openEditDialog(tool)}>
