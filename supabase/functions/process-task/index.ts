@@ -165,9 +165,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Initialize logger
+    // Initialize logger and error handler
     const taskStartTime = Date.now();
     const logger = createTaskLogger(supabase, task_id, taskStartTime);
+    const errorHandler = createErrorHandler(supabase, task_id);
 
     // Log user message
     const userMessage = task.input?.message || "";
@@ -231,9 +232,16 @@ Deno.serve(async (req) => {
       agent = data;
     }
     if (!agent) {
-      await logger.logError("No agent configured", {}, true);
+      const result = await errorHandler.escalateToHumanReview({
+        category: "validation",
+        error_message: "No agent configured. Set a default agent or assign one to this task.",
+        context: { task_id, agent_slug: task.agent_slug },
+        options: ["manual", "abort"],
+        priority: "high",
+      });
+      await logger.logError("No agent configured", { review_id: result.review_id });
       return new Response(
-        JSON.stringify({ error: "No agent configured" }),
+        JSON.stringify({ error: "No agent configured", escalated_to_human_review: result.success }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 },
       );
     }
@@ -290,9 +298,16 @@ Deno.serve(async (req) => {
       provider = data;
     }
     if (!provider) {
-      await logger.logError("No LLM provider configured", {}, true);
+      const result = await errorHandler.escalateToHumanReview({
+        category: "validation",
+        error_message: "No LLM provider configured. Add an active provider or assign one to the agent.",
+        context: { task_id, agent_slug: agent.slug },
+        options: ["manual", "abort"],
+        priority: "high",
+      });
+      await logger.logError("No LLM provider configured", { review_id: result.review_id });
       return new Response(
-        JSON.stringify({ error: "No LLM provider configured" }),
+        JSON.stringify({ error: "No LLM provider configured", escalated_to_human_review: result.success }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 },
       );
     }
@@ -308,9 +323,16 @@ Deno.serve(async (req) => {
     const { data: apiKey, error: vaultError } = await supabase.rpc("get_vault_secret", { secret_name: vaultKeyName });
     
     if (vaultError || !apiKey) {
-      await logger.logError(`API key not found: ${vaultKeyName}`, {}, true);
+      const result = await errorHandler.escalateToHumanReview({
+        category: "validation",
+        error_message: `API key not found in vault: ${vaultKeyName}. Add the key to Supabase Vault.`,
+        context: { task_id, agent_slug: agent.slug, additional_context: { vault_key: vaultKeyName, provider: provider.name } },
+        options: ["abort"],
+        priority: "critical",
+      });
+      await logger.logError(`API key not found: ${vaultKeyName}`, { review_id: result.review_id });
       return new Response(
-        JSON.stringify({ error: `API key not found: ${vaultKeyName}` }),
+        JSON.stringify({ error: `API key not found: ${vaultKeyName}`, escalated_to_human_review: result.success }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 },
       );
     }
@@ -530,9 +552,13 @@ Deno.serve(async (req) => {
       });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      await logger.logError(`LLM call failed: ${errorMsg}`, {}, true);
+      const result = await errorHandler.handleLLMError(errorMsg, {
+        agent_slug: agent.slug,
+        additional_context: { provider: provider.name, model },
+      });
+      await logger.logError(`LLM call failed: ${errorMsg}`, { review_id: result.review_id });
       return new Response(
-        JSON.stringify({ error: errorMsg }),
+        JSON.stringify({ error: errorMsg, escalated_to_human_review: result.success }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 },
       );
     }
