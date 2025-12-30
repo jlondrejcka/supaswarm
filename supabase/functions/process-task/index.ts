@@ -6,6 +6,7 @@ import { executeMcpTool, getMcpUrl, hasPreDefinedTools } from "./mcp-client.ts";
 import { callLLM, synthesizeResponse, getVaultKeyName, ConversationMessage } from "./llm-providers.ts";
 import { createTaskLogger } from "./task-logger.ts";
 import { fetchAgentSkills, getSkillListForPrompt, getLoadSkillToolDefinition, loadSkill } from "./skill-loader.ts";
+import { createErrorHandler, type ErrorHandler } from "./error-handler.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -899,7 +900,7 @@ Deno.serve(async (req) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[MAIN] Error:", message);
     
-    // For parallel tasks, escalate to human review instead of failing
+    // Escalate failures to human review using error handler
     try {
       const { task_id } = await req.clone().json().catch(() => ({ task_id: null }));
       if (task_id) {
@@ -908,25 +909,16 @@ Deno.serve(async (req) => {
           Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
         );
         
-        // Check if this is a parallel task
+        const errorHandler = createErrorHandler(supabase, task_id);
+        
+        // Check task details
         const { data: failedTask } = await supabase
           .from("tasks")
-          .select("is_parallel_task, dependent_task_ids, master_task_id")
+          .select("is_parallel_task, agent_slug, master_task_id, parent_id")
           .eq("id", task_id)
           .single();
         
         if (failedTask?.is_parallel_task) {
-          console.log("[MAIN] Parallel task failed, escalating to human review", { task_id });
-          
-          // Update task status to needs_human_review
-          await supabase
-            .from("tasks")
-            .update({
-              status: "needs_human_review",
-              output: { error: message },
-            })
-            .eq("id", task_id);
-          
           // Find aggregator task that depends on this task
           const { data: aggregatorTask } = await supabase
             .from("tasks")
@@ -935,25 +927,51 @@ Deno.serve(async (req) => {
             .eq("status", "queued")
             .single();
           
-          // Create human review entry
-          await supabase.from("human_reviews").insert({
-            task_id: task_id,
-            response: {
-              error: message,
-              options: ["retry", "abort", "manual"],
-              is_parallel_task: true,
-              aggregator_task_id: aggregatorTask?.id || null,
+          const result = await errorHandler.handleParallelTaskFailure(
+            message,
+            aggregatorTask?.id,
+            {
+              agent_slug: failedTask.agent_slug,
+              master_task_id: failedTask.master_task_id,
+              parent_task_id: failedTask.parent_id,
+            }
+          );
+          
+          if (result.success) {
+            return new Response(
+              JSON.stringify({ 
+                error: message, 
+                escalated_to_human_review: true,
+                review_id: result.review_id,
+                task_id,
+              }),
+              { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 },
+            );
+          }
+        } else {
+          // For non-parallel tasks, still escalate to human review
+          const result = await errorHandler.escalateToHumanReview({
+            category: "unknown",
+            error_message: message,
+            context: {
+              task_id,
+              agent_slug: failedTask?.agent_slug,
+              master_task_id: failedTask?.master_task_id,
+              parent_task_id: failedTask?.parent_id,
             },
           });
           
-          return new Response(
-            JSON.stringify({ 
-              error: message, 
-              escalated_to_human_review: true,
-              task_id,
-            }),
-            { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 },
-          );
+          if (result.success) {
+            return new Response(
+              JSON.stringify({ 
+                error: message, 
+                escalated_to_human_review: true,
+                review_id: result.review_id,
+                task_id,
+              }),
+              { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 },
+            );
+          }
         }
       }
     } catch (escalationError) {
