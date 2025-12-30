@@ -10,20 +10,23 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { Task, TaskStatus } from "@/lib/supabase-types"
-import { ArrowLeft, Clock, Bot, MessageSquare, AlertCircle, CheckCircle2, RefreshCw, Terminal } from "lucide-react"
+import { ArrowLeft, Clock, Bot, MessageSquare, AlertCircle, CheckCircle2, RefreshCw, Terminal, ListTree } from "lucide-react"
 import { TaskMessageThread } from "@/components/task-message-thread"
 import { format, formatDistanceToNow } from "date-fns"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 
 export default function TaskDetailPage() {
   const params = useParams()
   const taskId = params.id as string
   const [task, setTask] = useState<Task | null>(null)
+  const [subtasks, setSubtasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     fetchTask()
+    fetchSubtasks()
   }, [taskId])
 
   useEffect(() => {
@@ -71,6 +74,23 @@ export default function TaskDetailPage() {
       console.error("Failed to fetch task:", error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function fetchSubtasks() {
+    if (!supabase || !taskId) return
+
+    try {
+      const { data, error } = await supabase
+        .from("tasks")
+        .select("*")
+        .eq("master_task_id", taskId)
+        .order("created_at", { ascending: true })
+
+      if (error) throw error
+      setSubtasks(data || [])
+    } catch (error) {
+      console.error("Failed to fetch subtasks:", error)
     }
   }
 
@@ -138,7 +158,7 @@ export default function TaskDetailPage() {
             </p>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchTask} data-testid="button-refresh">
+        <Button variant="outline" size="sm" onClick={() => { fetchTask(); fetchSubtasks(); }} data-testid="button-refresh">
           <RefreshCw className="h-4 w-4" />
         </Button>
       </div>
@@ -231,6 +251,127 @@ export default function TaskDetailPage() {
               <TaskMessageThread taskId={taskId} variant="log" />
             </CardContent>
           </Card>
+
+          {subtasks.length > 0 && (
+            <Card>
+              <CardContent className="p-4">
+                <h3 className="font-semibold mb-4 flex items-center gap-2">
+                  <ListTree className="h-4 w-4" />
+                  Subtasks ({subtasks.length})
+                </h3>
+                <Accordion type="single" collapsible className="w-full">
+                  {subtasks.map((subtask, index) => {
+                    const subtaskInput = subtask.input as { message?: string } | null
+                    const subtaskOutput = subtask.output as { 
+                      response?: string
+                      error?: string
+                      reasoning_steps?: string[]
+                    } | null
+                    
+                    return (
+                      <AccordionItem key={subtask.id} value={subtask.id}>
+                        <AccordionTrigger className="hover:no-underline">
+                          <div className="flex items-center gap-3 text-left">
+                            <span className="text-muted-foreground text-xs font-mono">#{index + 1}</span>
+                            <StatusBadge status={subtask.status as TaskStatus} />
+                            <span className="font-mono text-xs">{subtask.id.slice(0, 8)}</span>
+                            <span className="text-muted-foreground text-xs">
+                              {subtask.agent_slug || "Unassigned"}
+                            </span>
+                            <span className="text-muted-foreground text-xs ml-auto">
+                              {subtask.created_at && format(new Date(subtask.created_at), "HH:mm:ss")}
+                            </span>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent>
+                          <div className="space-y-4 pt-2">
+                            <Card>
+                              <CardContent className="p-4 space-y-4">
+                                <div>
+                                  <h4 className="font-semibold mb-2 flex items-center gap-2 text-sm">
+                                    <MessageSquare className="h-4 w-4" />
+                                    Input
+                                  </h4>
+                                  <div className="bg-muted rounded-md p-3">
+                                    <pre className="text-sm whitespace-pre-wrap font-mono">
+                                      {subtaskInput?.message || JSON.stringify(subtask.input, null, 2)}
+                                    </pre>
+                                  </div>
+                                </div>
+
+                                <Separator />
+
+                                <div>
+                                  <h4 className="font-semibold mb-2 flex items-center gap-2 text-sm">
+                                    {subtask.status === 'failed' ? (
+                                      <AlertCircle className="h-4 w-4 text-destructive" />
+                                    ) : subtask.status === 'completed' ? (
+                                      <CheckCircle2 className="h-4 w-4 text-green-500" />
+                                    ) : (
+                                      <Clock className="h-4 w-4 text-muted-foreground" />
+                                    )}
+                                    Output
+                                  </h4>
+                                  {subtaskOutput ? (
+                                    <div className="bg-muted rounded-md p-3">
+                                      {subtaskOutput.error ? (
+                                        <p className="text-sm text-destructive">{subtaskOutput.error}</p>
+                                      ) : (
+                                        <p className="text-sm whitespace-pre-wrap">{subtaskOutput.response}</p>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="bg-muted rounded-md p-3">
+                                      <p className="text-sm text-muted-foreground">Waiting for output...</p>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {subtaskOutput?.reasoning_steps && subtaskOutput.reasoning_steps.length > 0 && (
+                                  <>
+                                    <Separator />
+                                    <div>
+                                      <h4 className="font-semibold mb-2 flex items-center gap-2 text-sm">
+                                        <Clock className="h-4 w-4" />
+                                        Reasoning Steps ({subtaskOutput.reasoning_steps.length})
+                                      </h4>
+                                      <div className="space-y-2">
+                                        {subtaskOutput.reasoning_steps.map((step, i) => (
+                                          <div key={i} className="bg-muted rounded-md p-3">
+                                            <pre className="whitespace-pre-wrap text-muted-foreground font-mono text-xs">{step}</pre>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </>
+                                )}
+
+                                <div className="flex justify-end">
+                                  <Link href={`/tasks/${subtask.id}`} className="text-xs text-primary hover:underline">
+                                    View Full Details →
+                                  </Link>
+                                </div>
+                              </CardContent>
+                            </Card>
+
+                            <Card>
+                              <CardContent className="p-4">
+                                <h4 className="font-semibold mb-4 flex items-center gap-2 text-sm">
+                                  <Terminal className="h-4 w-4" />
+                                  Message Thread
+                                </h4>
+                                <TaskMessageThread taskId={subtask.id} variant="log" />
+                              </CardContent>
+                            </Card>
+                          </div>
+                        </AccordionContent>
+                      </AccordionItem>
+                    )
+                  })}
+                </Accordion>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <div className="space-y-4">

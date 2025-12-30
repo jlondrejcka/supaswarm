@@ -32,6 +32,7 @@ export default function TasksPage() {
       const { data, error } = await supabase
         .from("tasks")
         .select("*")
+        .is("master_task_id", null)
         .order("created_at", { ascending: false })
 
       if (error) throw error

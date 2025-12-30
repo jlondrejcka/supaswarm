@@ -199,6 +199,74 @@ export type Database = {
         }
         Relationships: []
       }
+      provider_models: {
+        Row: {
+          id: string
+          provider_id: string
+          model_name: string
+          display_name: string | null
+          is_enabled: boolean | null
+          created_at: string | null
+          input_price_per_million: number | null
+          output_price_per_million: number | null
+          context_window: number | null
+          max_output_tokens: number | null
+          supports_vision: boolean | null
+          supports_tools: boolean | null
+          supports_streaming: boolean | null
+          model_family: string | null
+          release_date: string | null
+          is_latest: boolean | null
+          capabilities: Json | null
+        }
+        Insert: {
+          id?: string
+          provider_id: string
+          model_name: string
+          display_name?: string | null
+          is_enabled?: boolean | null
+          created_at?: string | null
+          input_price_per_million?: number | null
+          output_price_per_million?: number | null
+          context_window?: number | null
+          max_output_tokens?: number | null
+          supports_vision?: boolean | null
+          supports_tools?: boolean | null
+          supports_streaming?: boolean | null
+          model_family?: string | null
+          release_date?: string | null
+          is_latest?: boolean | null
+          capabilities?: Json | null
+        }
+        Update: {
+          id?: string
+          provider_id?: string
+          model_name?: string
+          display_name?: string | null
+          is_enabled?: boolean | null
+          created_at?: string | null
+          input_price_per_million?: number | null
+          output_price_per_million?: number | null
+          context_window?: number | null
+          max_output_tokens?: number | null
+          supports_vision?: boolean | null
+          supports_tools?: boolean | null
+          supports_streaming?: boolean | null
+          model_family?: string | null
+          release_date?: string | null
+          is_latest?: boolean | null
+          capabilities?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "provider_models_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "llm_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       skills: {
         Row: {
           created_at: string | null
@@ -431,6 +499,7 @@ export type Agent = Tables<'agents'>
 export type Tool = Tables<'tools'>
 export type Skill = Tables<'skills'>
 export type LLMProvider = Tables<'llm_providers'>
+export type ProviderModel = Tables<'provider_models'>
 export type HumanReview = Tables<'human_reviews'>
 export type AgentTool = Tables<'agent_tools'>
 export type AgentSkill = Tables<'agent_skills'>

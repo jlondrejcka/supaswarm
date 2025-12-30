@@ -17,7 +17,15 @@ import {
 } from "@/components/ui/dialog"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
-import type { LLMProvider } from "@/lib/supabase-types"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import type { LLMProvider, ProviderModel } from "@/lib/supabase-types"
 import { Settings, Key, Check, Save, Shield, Trash2, Plus, Lock, AlertCircle, ExternalLink } from "lucide-react"
 
 const ENV_VAR_NAMES: Record<string, string> = {
@@ -70,10 +78,14 @@ export default function SettingsPage() {
   
   const [quickSecretValues, setQuickSecretValues] = useState<Record<string, string>>({})
   const [savingQuickSecret, setSavingQuickSecret] = useState<string | null>(null)
+  
+  const [providerModels, setProviderModels] = useState<ProviderModel[]>([])
+  const [selectedModels, setSelectedModels] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     fetchProviders()
     fetchVaultSecrets()
+    fetchProviderModels()
   }, [])
 
   useEffect(() => {
@@ -121,6 +133,22 @@ export default function SettingsPage() {
     }
   }
 
+  async function fetchProviderModels() {
+    if (!supabase) return
+    
+    try {
+      const { data, error } = await supabase
+        .from("provider_models")
+        .select("*")
+        .order("model_name")
+      
+      if (error) throw error
+      setProviderModels(data || [])
+    } catch (error) {
+      console.error("Failed to fetch provider models:", error)
+    }
+  }
+
   function openConfigDialog(provider: LLMProvider) {
     setSelectedProvider(provider)
     setFormData({
@@ -129,6 +157,13 @@ export default function SettingsPage() {
       base_url: provider.base_url || "",
       api_key: "",
     })
+    // Set selected models state from current provider models
+    const models = providerModels.filter(m => m.provider_id === provider.id)
+    const modelState: Record<string, boolean> = {}
+    models.forEach(m => {
+      modelState[m.id] = m.is_enabled || false
+    })
+    setSelectedModels(modelState)
     setDialogOpen(true)
   }
 
@@ -167,8 +202,17 @@ export default function SettingsPage() {
 
       if (error) throw error
 
+      // Update model enabled states
+      for (const [modelId, isEnabled] of Object.entries(selectedModels)) {
+        await supabase
+          .from("provider_models")
+          .update({ is_enabled: isEnabled })
+          .eq("id", modelId)
+      }
+
       await fetchProviders()
       await fetchVaultSecrets()
+      await fetchProviderModels()
       setDialogOpen(false)
     } catch (error) {
       console.error("Failed to update provider:", error)
@@ -507,16 +551,16 @@ export default function SettingsPage() {
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Configure {selectedProvider?.display_name}</DialogTitle>
-            <DialogDescription>
-              Update the settings for this LLM provider
+            <DialogTitle className="text-base">Configure {selectedProvider?.display_name}</DialogTitle>
+            <DialogDescription className="text-xs">
+              Update provider settings
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="display_name">Display Name</Label>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="display_name" className="text-xs">Display Name</Label>
               <Input
                 id="display_name"
                 value={formData.display_name}
@@ -524,34 +568,80 @@ export default function SettingsPage() {
                 data-testid="input-display-name"
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="default_model">Default Model</Label>
-              <Input
-                id="default_model"
-                value={formData.default_model}
-                onChange={(e) => setFormData({ ...formData, default_model: e.target.value })}
-                placeholder="e.g., gpt-4, claude-3-opus"
-                data-testid="input-default-model"
-              />
+            {selectedProvider && (
+              <div className="space-y-2">
+                <Label className="text-xs">Available Models</Label>
+                <div className="border rounded-md p-2 space-y-1 max-h-[160px] overflow-y-auto">
+                  {providerModels
+                    .filter(m => m.provider_id === selectedProvider.id)
+                    .sort((a, b) => (b.is_latest ? 1 : 0) - (a.is_latest ? 1 : 0))
+                    .map((model) => (
+                      <div key={model.id} className="flex items-center gap-2 py-1">
+                        <Checkbox
+                          id={`model-${model.id}`}
+                          checked={selectedModels[model.id] || false}
+                          onCheckedChange={(checked) => 
+                            setSelectedModels(prev => ({ ...prev, [model.id]: !!checked }))
+                          }
+                          className="h-3.5 w-3.5"
+                        />
+                        <label htmlFor={`model-${model.id}`} className="text-xs cursor-pointer flex-1 flex items-center gap-1.5 flex-wrap">
+                          <span className="font-medium">{model.display_name || model.model_name}</span>
+                          {model.is_latest && (
+                            <span className="text-[9px] px-1 rounded bg-green-500/10 text-green-600">Latest</span>
+                          )}
+                          {model.supports_vision && (
+                            <span className="text-[9px] px-1 rounded bg-blue-500/10 text-blue-500">Vision</span>
+                          )}
+                          <span className="text-muted-foreground">
+                            {model.context_window && `${(model.context_window / 1000).toLocaleString()}K`}
+                            {model.input_price_per_million != null && ` • $${model.input_price_per_million}/$${model.output_price_per_million}`}
+                          </span>
+                        </label>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label htmlFor="default_model" className="text-xs">Default Model</Label>
+              <Select 
+                value={formData.default_model} 
+                onValueChange={(v) => setFormData({ ...formData, default_model: v })}
+              >
+                <SelectTrigger data-testid="select-default-model" className="h-8 text-sm">
+                  <SelectValue placeholder="Select default model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedProvider && providerModels
+                    .filter(m => m.provider_id === selectedProvider.id && selectedModels[m.id])
+                    .map((model) => (
+                      <SelectItem key={model.id} value={model.model_name}>
+                        {model.display_name || model.model_name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="base_url">Base URL</Label>
+            <div className="space-y-1">
+              <Label htmlFor="base_url" className="text-xs">Base URL</Label>
               <Input
                 id="base_url"
                 value={formData.base_url}
                 onChange={(e) => setFormData({ ...formData, base_url: e.target.value })}
                 placeholder="https://api.example.com/v1"
                 data-testid="input-base-url"
+                className="h-8 text-sm"
               />
             </div>
 
             {selectedProvider?.requires_api_key && (
-              <div className="space-y-2">
-                <Label htmlFor="api_key" className="flex items-center gap-2">
-                  <Shield className="h-4 w-4" />
+              <div className="space-y-1">
+                <Label htmlFor="api_key" className="flex items-center gap-2 text-xs">
+                  <Shield className="h-3 w-3" />
                   API Key
                   {selectedProviderHasKey && (
-                    <Badge variant="outline" className="text-xs">Already configured</Badge>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600">Already configured</span>
                   )}
                 </Label>
                 <Input
@@ -561,9 +651,10 @@ export default function SettingsPage() {
                   onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
                   placeholder={selectedProviderHasKey ? "Enter new key to update" : "Enter your API key"}
                   data-testid="input-api-key"
+                  className="h-8 text-sm"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Will be stored as <code className="bg-muted px-1 rounded">{envVarName}</code> in Supabase Vault
+                <p className="text-[10px] text-muted-foreground">
+                  Stored as <code className="bg-muted px-1 rounded">{envVarName}</code> in Vault
                 </p>
               </div>
             )}

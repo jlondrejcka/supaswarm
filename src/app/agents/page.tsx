@@ -32,12 +32,13 @@ import {
 } from "@/components/ui/accordion"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
-import type { Agent, LLMProvider, Tool, Skill } from "@/lib/supabase-types"
+import type { Agent, LLMProvider, Tool, Skill, ProviderModel } from "@/lib/supabase-types"
 import { Plus, Bot, Settings2, Save, Wrench, Zap, Star } from "lucide-react"
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [providers, setProviders] = useState<LLMProvider[]>([])
+  const [providerModels, setProviderModels] = useState<ProviderModel[]>([])
   const [tools, setTools] = useState<Tool[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
   const [loading, setLoading] = useState(true)
@@ -74,6 +75,7 @@ export default function AgentsPage() {
       const [
         { data: agentsData },
         { data: providersData },
+        { data: providerModelsData },
         { data: toolsData },
         { data: skillsData },
         { data: agentToolsData },
@@ -81,6 +83,7 @@ export default function AgentsPage() {
       ] = await Promise.all([
         supabase.from("agents").select("*").order("is_default", { ascending: false }).order("created_at", { ascending: false }),
         supabase.from("llm_providers").select("*").eq("is_active", true),
+        supabase.from("provider_models").select("*").eq("is_enabled", true).order("model_name"),
         supabase.from("tools").select("*").eq("is_active", true),
         supabase.from("skills").select("*").eq("is_active", true),
         supabase.from("agent_tools").select("*"),
@@ -89,6 +92,7 @@ export default function AgentsPage() {
       
       setAgents(agentsData || [])
       setProviders(providersData || [])
+      setProviderModels(providerModelsData || [])
       setTools(toolsData || [])
       setSkills(skillsData || [])
       
@@ -139,8 +143,8 @@ export default function AgentsPage() {
       system_prompt: agent.system_prompt,
       model: agent.model || "",
       provider_id: agent.provider_id || "",
-      temperature: String(agent.temperature || 0.7),
-      max_tokens: String(agent.max_tokens || 4096),
+      temperature: String(agent.temperature ?? 0.7),
+      max_tokens: String(agent.max_tokens ?? 4096),
       is_default: agent.is_default || false,
     })
     setSelectedTools(agentTools[agent.id] || [])
@@ -188,6 +192,9 @@ export default function AgentsPage() {
 
     setSaving(true)
     try {
+      const parsedTemp = parseFloat(formData.temperature)
+      const parsedTokens = parseInt(formData.max_tokens)
+      
       const payload = {
         name: formData.name,
         slug: formData.slug || generateSlug(formData.name),
@@ -195,8 +202,8 @@ export default function AgentsPage() {
         system_prompt: formData.system_prompt,
         model: formData.model || null,
         provider_id: formData.provider_id || null,
-        temperature: parseFloat(formData.temperature) || 0.7,
-        max_tokens: parseInt(formData.max_tokens) || 4096,
+        temperature: !isNaN(parsedTemp) ? parsedTemp : 0.7,
+        max_tokens: !isNaN(parsedTokens) ? parsedTokens : 4096,
         is_active: true,
         is_default: formData.is_default,
       }
@@ -421,7 +428,20 @@ export default function AgentsPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="provider">LLM Provider</Label>
-                <Select value={formData.provider_id} onValueChange={(v) => setFormData({ ...formData, provider_id: v })}>
+                <Select 
+                  value={formData.provider_id} 
+                  onValueChange={(v) => {
+                    // Check if current model is available for new provider
+                    const newProviderModels = providerModels.filter(m => m.provider_id === v)
+                    const modelAvailable = newProviderModels.some(m => m.model_name === formData.model)
+                    const defaultModel = providers.find(p => p.id === v)?.default_model || ""
+                    setFormData({ 
+                      ...formData, 
+                      provider_id: v,
+                      model: modelAvailable ? formData.model : defaultModel
+                    })
+                  }}
+                >
                   <SelectTrigger data-testid="select-provider">
                     <SelectValue placeholder="Select provider" />
                   </SelectTrigger>
@@ -434,13 +454,39 @@ export default function AgentsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="model">Model</Label>
-                <Input
-                  id="model"
-                  value={formData.model}
-                  onChange={(e) => setFormData({ ...formData, model: e.target.value })}
-                  placeholder="grok-4-1-fast-reasoning"
-                  data-testid="input-agent-model"
-                />
+                <Select 
+                  value={formData.model} 
+                  onValueChange={(v) => setFormData({ ...formData, model: v })}
+                  disabled={!formData.provider_id}
+                >
+                  <SelectTrigger data-testid="select-agent-model">
+                    <SelectValue placeholder={formData.provider_id ? "Select model" : "Select provider first"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {providerModels
+                      .filter(m => m.provider_id === formData.provider_id)
+                      .sort((a, b) => (b.is_latest ? 1 : 0) - (a.is_latest ? 1 : 0))
+                      .map((model) => (
+                        <SelectItem key={model.id} value={model.model_name}>
+                          <div className="flex items-center gap-2">
+                            <span>{model.display_name || model.model_name}</span>
+                            {model.is_latest && (
+                              <span className="text-[10px] px-1 py-0 rounded bg-green-500/10 text-green-600">Latest</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                {formData.model && (() => {
+                  const m = providerModels.find(pm => pm.model_name === formData.model)
+                  return m ? (
+                    <p className="text-xs text-muted-foreground">
+                      {m.context_window && `${(m.context_window / 1000).toLocaleString()}K context`}
+                      {m.input_price_per_million != null && ` • $${m.input_price_per_million}/$${m.output_price_per_million} per M tokens`}
+                    </p>
+                  ) : null
+                })()}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -461,9 +507,12 @@ export default function AgentsPage() {
                 <Label htmlFor="max_tokens">Max Tokens</Label>
                 <Input
                   id="max_tokens"
-                  type="number"
-                  value={formData.max_tokens}
-                  onChange={(e) => setFormData({ ...formData, max_tokens: e.target.value })}
+                  type="text"
+                  value={(() => {
+                    const num = parseInt(formData.max_tokens.replace(/,/g, ""))
+                    return isNaN(num) ? "" : num.toLocaleString()
+                  })()}
+                  onChange={(e) => setFormData({ ...formData, max_tokens: e.target.value.replace(/[^0-9]/g, "") })}
                   data-testid="input-agent-max-tokens"
                 />
               </div>
