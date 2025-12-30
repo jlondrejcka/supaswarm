@@ -738,6 +738,24 @@ Deno.serve(async (req) => {
                     tool_call_id: toolCall.id,
                   });
                   
+                  // Explicitly mark current task as completed
+                  const { error: completeError } = await supabase
+                    .from("tasks")
+                    .update({
+                      status: "completed",
+                      output: {
+                        handoff: true,
+                        target_agent: targetAgent.slug,
+                        new_task_id: newTask.id,
+                        context: newContext,
+                      },
+                    })
+                    .eq("id", task_id);
+                  
+                  if (completeError) {
+                    console.error("[MAIN] Failed to complete task after handoff:", completeError);
+                  }
+                  
                   handoffExecuted = true;
                   toolResult = `Handed off to ${targetAgent.name}`;
                   

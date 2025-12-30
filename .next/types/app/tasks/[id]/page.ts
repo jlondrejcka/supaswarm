@@ -1,4 +1,4 @@
-// File: /Users/joe-studio/Documents/Workspace/supaswarm/src/app/tasks/[id]/page.tsx
+// File: /Users/joe-studio/.cursor/worktrees/supaswarm/ejd/src/app/tasks/[id]/page.tsx
 import * as entry from '../../../../../src/app/tasks/[id]/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 
