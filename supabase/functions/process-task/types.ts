@@ -81,6 +81,9 @@ export interface Task {
   output: Record<string, unknown> | null;
   intermediate_data: Record<string, unknown> | null;
   context: TaskContext | null;
+  // Parallel coordination fields
+  is_parallel_task: boolean;
+  dependent_task_ids: string[] | null;
 }
 
 export interface TaskContext {
@@ -88,7 +91,17 @@ export interface TaskContext {
   _handoff_tool?: string;
   _handoff_instructions?: string;
   _handoff_chain?: string[];
+  // Parallel coordination
+  _parallel_results?: ParallelTaskResult[];
+  _aggregation_instructions?: string;
   [key: string]: unknown;
+}
+
+export interface ParallelTaskResult {
+  task_id: string;
+  agent_slug: string;
+  output: Record<string, unknown> | null;
+  source: "agent" | "human_review";
 }
 
 export interface ToolCall {

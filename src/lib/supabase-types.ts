@@ -312,9 +312,11 @@ export type Database = {
           agent_slug: string | null
           context: Json
           created_at: string | null
+          dependent_task_ids: string[] | null
           id: string
           input: Json
           intermediate_data: Json | null
+          is_parallel_task: boolean
           logs: string[] | null
           master_task_id: string | null
           output: Json | null
@@ -328,9 +330,11 @@ export type Database = {
           agent_slug?: string | null
           context?: Json
           created_at?: string | null
+          dependent_task_ids?: string[] | null
           id?: string
           input?: Json
           intermediate_data?: Json | null
+          is_parallel_task?: boolean
           logs?: string[] | null
           master_task_id?: string | null
           output?: Json | null
@@ -344,9 +348,11 @@ export type Database = {
           agent_slug?: string | null
           context?: Json
           created_at?: string | null
+          dependent_task_ids?: string[] | null
           id?: string
           input?: Json
           intermediate_data?: Json | null
+          is_parallel_task?: boolean
           logs?: string[] | null
           master_task_id?: string | null
           output?: Json | null
@@ -504,7 +510,7 @@ export type HumanReview = Tables<'human_reviews'>
 export type AgentTool = Tables<'agent_tools'>
 export type AgentSkill = Tables<'agent_skills'>
 
-export type TaskStatus = 'pending' | 'running' | 'pending_subtask' | 'needs_human_review' | 'completed' | 'failed' | 'cancelled'
+export type TaskStatus = 'pending' | 'queued' | 'running' | 'pending_subtask' | 'needs_human_review' | 'completed' | 'failed' | 'cancelled'
 export type ToolType = 'internal' | 'mcp_server' | 'http_api' | 'supabase_rpc' | 'handoff'
 export type CredentialType = 'api_key' | 'bearer_token' | 'oauth_refresh_token' | 'none'
 

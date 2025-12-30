@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
-import type { Tool, Agent, LLMProvider, LLMToolDefinition, ToolCall, TaskContext, Skill } from "./types.ts";
+import type { Tool, Agent, LLMProvider, LLMToolDefinition, ToolCall, TaskContext, Skill, ParallelTaskResult } from "./types.ts";
 import { executeMcpTool, getMcpUrl, hasPreDefinedTools } from "./mcp-client.ts";
 import { callLLM, synthesizeResponse, getVaultKeyName, ConversationMessage } from "./llm-providers.ts";
 import { createTaskLogger } from "./task-logger.ts";
@@ -11,6 +11,64 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// Built-in tool definitions for parallel coordination
+function getCreateAggregatorTaskToolDefinition(): LLMToolDefinition {
+  return {
+    type: "function",
+    function: {
+      name: "create_aggregator_task",
+      description: "Create a task that waits for parallel tasks to complete, then synthesizes their results. The aggregator will automatically run when all dependent tasks are done.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent_id: {
+            type: "string",
+            description: "ID of the agent to handle aggregation",
+          },
+          dependent_task_ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of task IDs to wait for",
+          },
+          instructions: {
+            type: "string",
+            description: "Instructions for how to aggregate/synthesize the results",
+          },
+        },
+        required: ["agent_id", "dependent_task_ids", "instructions"],
+      },
+    },
+  };
+}
+
+function getCreateParallelTaskToolDefinition(): LLMToolDefinition {
+  return {
+    type: "function",
+    function: {
+      name: "create_parallel_task",
+      description: "Create a parallel task that runs independently. Returns the task ID for use with create_aggregator_task.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent_id: {
+            type: "string",
+            description: "ID of the agent to handle this task",
+          },
+          message: {
+            type: "string",
+            description: "The task message/instructions",
+          },
+          context: {
+            type: "object",
+            description: "Optional context variables to pass to the task",
+          },
+        },
+        required: ["agent_id", "message"],
+      },
+    },
+  };
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -320,6 +378,11 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Add built-in parallel coordination tools
+    toolDefinitions.push(getCreateParallelTaskToolDefinition());
+    toolDefinitions.push(getCreateAggregatorTaskToolDefinition());
+    console.log("[MAIN] Added parallel coordination tools");
+
     console.log("[MAIN] Tool definitions built", {
       count: toolDefinitions.length,
       names: toolDefinitions.map(t => t.function.name),
@@ -366,6 +429,48 @@ Deno.serve(async (req) => {
         skill_count: skills.length,
         skill_ids: skills.map(s => s.skill_id),
       });
+    }
+
+    // Inject parallel task results for aggregator tasks
+    if (task.dependent_task_ids && task.dependent_task_ids.length > 0) {
+      const { data: depTasks } = await supabase
+        .from("tasks")
+        .select("id, agent_slug, status, output")
+        .in("id", task.dependent_task_ids);
+      
+      if (depTasks && depTasks.length > 0) {
+        const parallelResults: ParallelTaskResult[] = depTasks
+          .filter(d => d.status === "completed")
+          .map(d => ({
+            task_id: d.id,
+            agent_slug: d.agent_slug || "unknown",
+            output: d.output,
+            source: (d.output?.source === "human_review" ? "human_review" : "agent") as "agent" | "human_review",
+          }));
+        
+        // Add to task context
+        const updatedContext: TaskContext = {
+          ...(taskContext || {}),
+          _parallel_results: parallelResults,
+        };
+        
+        // Inject into system prompt
+        const resultsSection = parallelResults.map(r => 
+          `### ${r.agent_slug} (${r.source})\n${JSON.stringify(r.output, null, 2)}`
+        ).join("\n\n");
+        
+        systemPrompt = `${systemPrompt}\n\n---\n## Parallel Task Results\nYou are an aggregator task. The following parallel tasks have completed:\n\n${resultsSection}`;
+        
+        // Add aggregation instructions if present
+        if (taskContext?._aggregation_instructions) {
+          systemPrompt = `${systemPrompt}\n\n## Aggregation Instructions\n${taskContext._aggregation_instructions}`;
+        }
+        
+        console.log("[MAIN] Injected parallel task results", {
+          dependent_count: task.dependent_task_ids.length,
+          completed_count: parallelResults.length,
+        });
+      }
     }
 
     await logger.logThinking("Calling LLM...", {
@@ -442,6 +547,122 @@ Deno.serve(async (req) => {
           
           const duration = Date.now() - toolCallStart;
           await logger.logToolResult(toolName, toolCall.id, toolResult, !!skill, duration);
+          toolResults.push(toolResult);
+          continue;
+        }
+
+        // Handle create_parallel_task built-in tool
+        if (toolName === "create_parallel_task") {
+          const targetAgentId = toolArgs.agent_id as string;
+          const taskMessage = toolArgs.message as string;
+          const taskContext = toolArgs.context as Record<string, unknown> | undefined;
+          
+          // Fetch target agent
+          const { data: targetAgent } = await supabase
+            .from("agents")
+            .select("id, name, slug")
+            .eq("id", targetAgentId)
+            .single();
+          
+          if (!targetAgent) {
+            toolResult = `Error: Agent not found (${targetAgentId})`;
+          } else {
+            const masterTaskId = task.master_task_id || task.id;
+            
+            const { data: newTask, error: createError } = await supabase
+              .from("tasks")
+              .insert({
+                master_task_id: masterTaskId,
+                parent_id: task_id,
+                agent_id: targetAgent.id,
+                agent_slug: targetAgent.slug,
+                status: "pending",
+                is_parallel_task: true,
+                input: { message: taskMessage },
+                context: taskContext || {},
+              })
+              .select()
+              .single();
+            
+            if (createError || !newTask) {
+              toolResult = `Error creating parallel task: ${createError?.message}`;
+            } else {
+              console.log("[MAIN] Parallel task created", {
+                new_task_id: newTask.id,
+                target_agent: targetAgent.slug,
+                is_parallel: true,
+              });
+              
+              // Fire and forget - trigger task processing
+              supabase.functions.invoke("process-task", {
+                body: { task_id: newTask.id },
+              }).catch(err => {
+                console.error("[MAIN] Failed to trigger parallel task:", err);
+              });
+              
+              toolResult = `Parallel task created. Task ID: ${newTask.id}`;
+            }
+          }
+          
+          const duration = Date.now() - toolCallStart;
+          await logger.logToolResult(toolName, toolCall.id, toolResult, !toolResult.includes("Error"), duration);
+          toolResults.push(toolResult);
+          continue;
+        }
+
+        // Handle create_aggregator_task built-in tool
+        if (toolName === "create_aggregator_task") {
+          const targetAgentId = toolArgs.agent_id as string;
+          const dependentTaskIds = toolArgs.dependent_task_ids as string[];
+          const instructions = toolArgs.instructions as string;
+          
+          // Fetch target agent
+          const { data: targetAgent } = await supabase
+            .from("agents")
+            .select("id, name, slug")
+            .eq("id", targetAgentId)
+            .single();
+          
+          if (!targetAgent) {
+            toolResult = `Error: Agent not found (${targetAgentId})`;
+          } else if (!dependentTaskIds || dependentTaskIds.length === 0) {
+            toolResult = `Error: dependent_task_ids is required`;
+          } else {
+            const masterTaskId = task.master_task_id || task.id;
+            
+            const { data: newTask, error: createError } = await supabase
+              .from("tasks")
+              .insert({
+                master_task_id: masterTaskId,
+                parent_id: task_id,
+                agent_id: targetAgent.id,
+                agent_slug: targetAgent.slug,
+                status: "queued", // Will be activated by trigger when deps complete
+                dependent_task_ids: dependentTaskIds,
+                input: { message: `Aggregate results from ${dependentTaskIds.length} parallel tasks` },
+                context: {
+                  _aggregation_instructions: instructions,
+                },
+              })
+              .select()
+              .single();
+            
+            if (createError || !newTask) {
+              toolResult = `Error creating aggregator task: ${createError?.message}`;
+            } else {
+              console.log("[MAIN] Aggregator task created", {
+                new_task_id: newTask.id,
+                target_agent: targetAgent.slug,
+                dependent_task_ids: dependentTaskIds,
+                status: "queued",
+              });
+              
+              toolResult = `Aggregator task created (queued). Task ID: ${newTask.id}. Will activate when all ${dependentTaskIds.length} dependent tasks complete.`;
+            }
+          }
+          
+          const duration = Date.now() - toolCallStart;
+          await logger.logToolResult(toolName, toolCall.id, toolResult, !toolResult.includes("Error"), duration);
           toolResults.push(toolResult);
           continue;
         }
@@ -640,6 +861,68 @@ Deno.serve(async (req) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[MAIN] Error:", message);
+    
+    // For parallel tasks, escalate to human review instead of failing
+    try {
+      const { task_id } = await req.clone().json().catch(() => ({ task_id: null }));
+      if (task_id) {
+        const supabase = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        );
+        
+        // Check if this is a parallel task
+        const { data: failedTask } = await supabase
+          .from("tasks")
+          .select("is_parallel_task, dependent_task_ids, master_task_id")
+          .eq("id", task_id)
+          .single();
+        
+        if (failedTask?.is_parallel_task) {
+          console.log("[MAIN] Parallel task failed, escalating to human review", { task_id });
+          
+          // Update task status to needs_human_review
+          await supabase
+            .from("tasks")
+            .update({
+              status: "needs_human_review",
+              output: { error: message },
+            })
+            .eq("id", task_id);
+          
+          // Find aggregator task that depends on this task
+          const { data: aggregatorTask } = await supabase
+            .from("tasks")
+            .select("id")
+            .contains("dependent_task_ids", [task_id])
+            .eq("status", "queued")
+            .single();
+          
+          // Create human review entry
+          await supabase.from("human_reviews").insert({
+            task_id: task_id,
+            response: {
+              error: message,
+              options: ["retry", "abort", "manual"],
+              is_parallel_task: true,
+              aggregator_task_id: aggregatorTask?.id || null,
+            },
+          });
+          
+          return new Response(
+            JSON.stringify({ 
+              error: message, 
+              escalated_to_human_review: true,
+              task_id,
+            }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+      }
+    } catch (escalationError) {
+      console.error("[MAIN] Failed to escalate to human review:", escalationError);
+    }
+    
     return new Response(
       JSON.stringify({ error: message }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 },
