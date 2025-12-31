@@ -13,10 +13,11 @@
 </p>
 
 <p align="center">
+  <a href="#why-supaswarm">Why SupaSwarm?</a> •
+  <a href="#integration-patterns">Integration</a> •
   <a href="#features">Features</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#architecture">Architecture</a> •
-  <a href="#usage">Usage</a> •
   <a href="#contributing">Contributing</a>
 </p>
 
@@ -26,6 +27,34 @@
   <img src="https://img.shields.io/badge/Next.js-14+-black?logo=next.js" alt="Next.js 14+" />
   <img src="https://img.shields.io/badge/TypeScript-5.6-blue?logo=typescript" alt="TypeScript" />
 </p>
+
+---
+
+## Why SupaSwarm?
+
+### 🔄 **Tired of SDK Migrations?**
+Agent SDKs constantly change, break compatibility, and don't work when your client has different specs. SupaSwarm moves all agent logic to the database—deploy once, no client-side SDK headaches.
+
+### 🌐 **Real-time Multi-Device Sync**
+Users work across multiple devices. SupaSwarm leverages Supabase Realtime so your agents run in the cloud with instant updates everywhere—no polling, no stale state.
+
+### 🚀 **No Client/Server Trigger Issues**
+Struggling to trigger agents from different contexts? With database-native orchestration, any system that can write a row can trigger an agent.
+
+---
+
+## Integration Patterns
+
+SupaSwarm is designed to plug into your existing workflows:
+
+### 📊 **Database Triggers → Background Agents**
+Have database records trigger new task records automatically. Insert a row in your `orders` table? Fire off an agent to process it. Background agents at your fingertips.
+
+### 🔗 **n8n → External System Triggers**
+Use [n8n](https://n8n.io) workflows to have external systems (webhooks, CRMs, email, Slack, etc.) trigger new tasks in your Supabase database. No custom API endpoints needed.
+
+### 🛠️ **n8n MCP Servers → Agent Tools**
+Wire up [n8n MCP servers](https://n8n.io/integrations/mcp-server-trigger/) to give your agents access to 500+ integrations. Need your agent to send emails, update Notion, or query Salesforce? Just connect the MCP server.
 
 ---
 
