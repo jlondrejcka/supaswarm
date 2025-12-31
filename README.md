@@ -373,6 +373,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Acknowledgments
 
 - [Supabase](https://supabase.com) - The backend platform
+- [Replit](https://replit.com) - Initial design and v1 development
+- [Cursor](https://cursor.com) - Fine-tuning and iteration
 - [shadcn/ui](https://ui.shadcn.com) - UI components
 - [Lucide](https://lucide.dev) - Icons
 - [Vercel](https://vercel.com) - Design inspiration
