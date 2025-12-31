@@ -80,6 +80,11 @@ Built entirely on Supabase services—Postgres, Edge Functions, Realtime, Storag
 - **Real-time Updates**: Live task status via Supabase Realtime
 - **Human Review Queue**: Escalation for uncertain decisions
 
+### 📈 **Usage Analytics**
+- **Agent Leaderboard**: Track your most-used agents
+- **Tool Usage**: Monitor which tools are called most frequently
+- **Skill Analytics**: See which skills drive the most automation
+
 ### 🔐 **Secure by Design**
 - **Vault Integration**: All secrets stored in Supabase Vault
 - **Zero Exposure**: No credentials in database rows or logs
@@ -330,6 +335,20 @@ supabase functions serve process-task --env-file .env
 # Deploy
 supabase functions deploy process-task
 ```
+
+---
+
+## Roadmap
+
+### 🔮 **Coming Soon**
+
+- **Human Observations Agent**: An AI agent that analyzes human task patterns to:
+  - Identify repetitive workflows that can be automated
+  - Suggest optimizations for existing agents
+  - Auto-generate new skills and tools based on observed behavior
+  - Continuously improve agent performance through feedback loops
+
+Want to contribute to the roadmap? [Open an issue](https://github.com/jlondrejcka/supaswarm/issues) with your ideas!
 
 ---
 
