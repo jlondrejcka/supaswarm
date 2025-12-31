@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
+import { ChatDialog } from "@/components/chat-dialog"
 import type { Task, TaskStatus } from "@/lib/supabase-types"
 import { Plus, RefreshCw, ChevronRight } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
@@ -16,6 +17,7 @@ export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<TaskStatus | "all">("all")
+  const [chatOpen, setChatOpen] = useState(false)
 
   useEffect(() => {
     fetchTasks()
@@ -68,7 +70,7 @@ export default function TasksPage() {
           <Button variant="outline" size="sm" onClick={fetchTasks} data-testid="button-refresh">
             <RefreshCw className="h-4 w-4" />
           </Button>
-          <Button size="sm" data-testid="button-create-task">
+          <Button size="sm" onClick={() => setChatOpen(true)} data-testid="button-create-task">
             <Plus className="h-4 w-4" />
             New Task
           </Button>
@@ -153,6 +155,17 @@ export default function TasksPage() {
           ))}
         </div>
       )}
+
+      <ChatDialog 
+        open={chatOpen} 
+        onOpenChange={(open) => {
+          setChatOpen(open)
+          if (!open) {
+            // Refresh tasks when dialog closes
+            fetchTasks()
+          }
+        }} 
+      />
     </div>
   )
 }
