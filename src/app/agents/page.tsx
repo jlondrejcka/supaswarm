@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -33,7 +33,10 @@ import {
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { Agent, LLMProvider, Tool, Skill, ProviderModel } from "@/lib/supabase-types"
-import { Plus, Bot, Settings2, Save, Wrench, Zap, Star } from "lucide-react"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { AgentHierarchyView } from "@/components/agent-hierarchy-view"
+import { Plus, Bot, Settings2, Save, Wrench, Zap, Star, Heart, LayoutGrid, GitBranch, EyeOff } from "lucide-react"
+import { formatDistanceToNow } from "date-fns"
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([])
@@ -55,11 +58,21 @@ export default function AgentsPage() {
     temperature: "0.7",
     max_tokens: "4096",
     is_default: false,
+    role: "",
+    memory_mode: "none",
+    daily_token_budget: "",
   })
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [agentTools, setAgentTools] = useState<Record<string, string[]>>({})
   const [agentSkills, setAgentSkills] = useState<Record<string, string[]>>({})
+  const [viewMode, setViewMode] = useState<"cards" | "hierarchy">("cards")
+  const [hideInactive, setHideInactive] = useState(false)
+
+  const filteredAgents = useMemo(
+    () => hideInactive ? agents.filter(a => a.is_active) : agents,
+    [agents, hideInactive]
+  )
 
   useEffect(() => {
     fetchData()
@@ -128,6 +141,9 @@ export default function AgentsPage() {
       temperature: "0.7",
       max_tokens: "4096",
       is_default: false,
+      role: "",
+      memory_mode: "none",
+      daily_token_budget: "",
     })
     setSelectedTools([])
     setSelectedSkills([])
@@ -146,6 +162,9 @@ export default function AgentsPage() {
       temperature: String(agent.temperature ?? 0.7),
       max_tokens: String(agent.max_tokens ?? 4096),
       is_default: agent.is_default || false,
+      role: agent.role || "",
+      memory_mode: agent.memory_mode || "none",
+      daily_token_budget: agent.daily_token_budget != null ? String(agent.daily_token_budget) : "",
     })
     setSelectedTools(agentTools[agent.id] || [])
     setSelectedSkills(agentSkills[agent.id] || [])
@@ -195,6 +214,8 @@ export default function AgentsPage() {
       const parsedTemp = parseFloat(formData.temperature)
       const parsedTokens = parseInt(formData.max_tokens)
       
+      const parsedBudget = parseInt(formData.daily_token_budget)
+
       const payload = {
         name: formData.name,
         slug: formData.slug || generateSlug(formData.name),
@@ -206,6 +227,9 @@ export default function AgentsPage() {
         max_tokens: !isNaN(parsedTokens) ? parsedTokens : 4096,
         is_active: true,
         is_default: formData.is_default,
+        role: formData.role || null,
+        memory_mode: formData.memory_mode || null,
+        daily_token_budget: !isNaN(parsedBudget) ? parsedBudget : null,
       }
 
       let agentId: string
@@ -290,112 +314,201 @@ export default function AgentsPage() {
         </Button>
       </div>
 
-      {loading ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-5 w-32" />
-                <Skeleton className="h-4 w-48" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-4 w-24" />
-              </CardContent>
-            </Card>
-          ))}
+      <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as "cards" | "hierarchy")}>
+        <div className="flex items-center justify-between gap-4">
+          <TabsList>
+            <TabsTrigger value="cards" className="gap-1.5">
+              <LayoutGrid className="h-3.5 w-3.5" />
+              Cards
+            </TabsTrigger>
+            <TabsTrigger value="hierarchy" className="gap-1.5">
+              <GitBranch className="h-3.5 w-3.5" />
+              Hierarchy
+            </TabsTrigger>
+          </TabsList>
+          <div className="flex items-center gap-2">
+            <Switch
+              id="hide-inactive"
+              checked={hideInactive}
+              onCheckedChange={setHideInactive}
+            />
+            <Label htmlFor="hide-inactive" className="text-sm text-muted-foreground cursor-pointer flex items-center gap-1.5">
+              <EyeOff className="h-3.5 w-3.5" />
+              Hide inactive
+            </Label>
+          </div>
         </div>
-      ) : agents.length === 0 ? (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <Bot className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <p className="text-muted-foreground">No agents configured yet</p>
-            <Button className="mt-4" onClick={openCreateDialog} data-testid="button-create-first-agent">
-              <Plus className="h-4 w-4" />
-              Create Your First Agent
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {agents.map((agent) => (
-              <Card key={agent.id} className={`hover:bg-accent/50 transition-colors cursor-pointer ${agent.is_default ? 'ring-2 ring-primary' : ''}`} onClick={() => openEditDialog(agent)}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Bot className="h-5 w-5 text-primary" />
-                      <CardTitle className="text-base" data-testid={`text-agent-name-${agent.id}`}>
-                        {agent.name}
-                      </CardTitle>
-                    </div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {agent.is_default && (
-                        <Badge className="gap-1 bg-primary">
-                          <Star className="h-3 w-3" />
-                          Default
-                        </Badge>
-                      )}
-                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                        <Switch
-                          checked={agent.is_active ?? false}
-                          onCheckedChange={() => toggleAgentActive(agent.id, agent.is_active ?? false, agent.is_default ?? false)}
-                          data-testid={`switch-agent-active-${agent.id}`}
-                        />
-                        <span className={`text-xs ${agent.is_active ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
-                          {agent.is_active ? "Active" : "Inactive"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <CardDescription className="line-clamp-2">
-                    {agent.description || "No description"}
-                  </CardDescription>
+
+        {loading ? (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 mt-4">
+            {[1, 2, 3].map((i) => (
+              <Card key={i}>
+                <CardHeader>
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="h-4 w-48" />
                 </CardHeader>
                 <CardContent>
-                  <div className="flex items-center justify-between gap-2 text-sm">
-                    <span className="text-muted-foreground font-mono">{agent.slug}</span>
-                    {!agent.is_default && (
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        onClick={(e) => setAsDefault(agent.id, e)}
-                        data-testid={`button-set-default-${agent.id}`}
-                      >
-                        <Star className="h-4 w-4" />
-                        Set Default
-                      </Button>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                    {agentSkills[agent.id]?.map((skillId) => {
-                      const skill = skills.find(s => s.id === skillId)
-                      return skill ? (
-                        <Badge key={skillId} className="gap-1 bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20">
-                          <Zap className="h-3 w-3" />
-                          {skill.name}
-                        </Badge>
-                      ) : null
-                    })}
-                    {agentTools[agent.id]?.map((toolId) => {
-                      const tool = tools.find(t => t.id === toolId)
-                      return tool ? (
-                        <Badge key={toolId} className="gap-1 bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30 hover:bg-blue-500/20">
-                          <Wrench className="h-3 w-3" />
-                          {tool.name}
-                        </Badge>
-                      ) : null
-                    })}
-                  </div>
-                  {agent.model && (
-                    <p className="text-xs text-muted-foreground mt-2">
-                      Model: {agent.model}
-                    </p>
-                  )}
+                  <Skeleton className="h-4 w-24" />
                 </CardContent>
               </Card>
-            )
-          )}
-        </div>
-      )}
+            ))}
+          </div>
+        ) : filteredAgents.length === 0 ? (
+          <Card className="mt-4">
+            <CardContent className="p-8 text-center">
+              <Bot className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+              <p className="text-muted-foreground">
+                {hideInactive && agents.length > 0 ? "All agents are inactive" : "No agents configured yet"}
+              </p>
+              {agents.length === 0 && (
+                <Button className="mt-4" onClick={openCreateDialog} data-testid="button-create-first-agent">
+                  <Plus className="h-4 w-4" />
+                  Create Your First Agent
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+            <TabsContent value="cards">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {filteredAgents.map((agent) => (
+                    <Card key={agent.id} className={`hover:bg-accent/50 transition-colors cursor-pointer ${agent.is_default ? 'ring-2 ring-primary' : ''}`} onClick={() => openEditDialog(agent)}>
+                      <CardHeader className="pb-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <Bot className="h-5 w-5 text-primary" />
+                            <CardTitle className="text-base" data-testid={`text-agent-name-${agent.id}`}>
+                              {agent.name}
+                            </CardTitle>
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {agent.is_default && (
+                              <Badge className="gap-1 bg-primary">
+                                <Star className="h-3 w-3" />
+                                Default
+                              </Badge>
+                            )}
+                            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                              <Switch
+                                checked={agent.is_active ?? false}
+                                onCheckedChange={() => toggleAgentActive(agent.id, agent.is_active ?? false, agent.is_default ?? false)}
+                                data-testid={`switch-agent-active-${agent.id}`}
+                              />
+                              <span className={`text-xs ${agent.is_active ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                                {agent.is_active ? "Active" : "Inactive"}
+                              </span>
+                              {agent.status && (
+                                <span className="flex items-center gap-1 text-xs">
+                                  <span className={`inline-block h-2 w-2 rounded-full ${
+                                    agent.status === 'active' ? 'bg-green-500' :
+                                    agent.status === 'idle' ? 'bg-yellow-500' :
+                                    agent.status === 'offline' ? 'bg-gray-400' :
+                                    agent.status === 'error' ? 'bg-red-500' : ''
+                                  }`} />
+                                  <span className={`${
+                                    agent.status === 'active' ? 'text-green-600 dark:text-green-400' :
+                                    agent.status === 'idle' ? 'text-yellow-600 dark:text-yellow-400' :
+                                    agent.status === 'offline' ? 'text-muted-foreground' :
+                                    agent.status === 'error' ? 'text-red-600 dark:text-red-400' : ''
+                                  }`}>
+                                    {agent.status}
+                                  </span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        {agent.role && (
+                          <Badge className={`text-xs w-fit ${
+                            agent.role === 'worker' ? 'bg-blue-500/15 text-blue-600' :
+                            agent.role === 'supervisor' ? 'bg-purple-500/15 text-purple-600' :
+                            agent.role === 'specialist' ? 'bg-amber-500/15 text-amber-600' : ''
+                          }`}>
+                            {agent.role}
+                          </Badge>
+                        )}
+                        <CardDescription className="line-clamp-2">
+                          {agent.description || "No description"}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex items-center justify-between gap-2 text-sm">
+                          <span className="text-muted-foreground font-mono">{agent.slug}</span>
+                          {!agent.is_default && (
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              onClick={(e) => setAsDefault(agent.id, e)}
+                              data-testid={`button-set-default-${agent.id}`}
+                            >
+                              <Star className="h-4 w-4" />
+                              Set Default
+                            </Button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                          {agentSkills[agent.id]?.map((skillId) => {
+                            const skill = skills.find(s => s.id === skillId)
+                            return skill ? (
+                              <Badge key={skillId} className="gap-1 bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20">
+                                <Zap className="h-3 w-3" />
+                                {skill.name}
+                              </Badge>
+                            ) : null
+                          })}
+                          {agentTools[agent.id]?.map((toolId) => {
+                            const tool = tools.find(t => t.id === toolId)
+                            return tool ? (
+                              <Badge key={toolId} className="gap-1 bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30 hover:bg-blue-500/20">
+                                <Wrench className="h-3 w-3" />
+                                {tool.name}
+                              </Badge>
+                            ) : null
+                          })}
+                        </div>
+                        {agent.model && (
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Model: {agent.model}
+                          </p>
+                        )}
+                        {agent.last_heartbeat && (() => {
+                          const heartbeatDate = new Date(agent.last_heartbeat)
+                          const isStale = Date.now() - heartbeatDate.getTime() > 5 * 60 * 1000
+                          return (
+                            <p className={`text-xs mt-1 flex items-center gap-1 ${isStale ? 'text-red-500' : 'text-muted-foreground'}`}>
+                              <Heart className="h-3 w-3" />
+                              {formatDistanceToNow(heartbeatDate, { addSuffix: true })}
+                            </p>
+                          )
+                        })()}
+                        {agent.daily_token_budget != null && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Budget: {agent.daily_token_budget.toLocaleString()} tokens/day
+                          </p>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="hierarchy">
+              <AgentHierarchyView
+                agents={filteredAgents}
+                tools={tools}
+                skills={skills}
+                agentTools={agentTools}
+                agentSkills={agentSkills}
+                onEdit={openEditDialog}
+                onSetDefault={setAsDefault}
+                onToggleActive={toggleAgentActive}
+              />
+            </TabsContent>
+          </>
+        )}
+      </Tabs>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
@@ -558,6 +671,53 @@ export default function AgentsPage() {
                 checked={formData.is_default}
                 onCheckedChange={(checked) => setFormData({ ...formData, is_default: checked })}
                 data-testid="switch-default-agent"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="role">Role</Label>
+                <Select
+                  value={formData.role}
+                  onValueChange={(v) => setFormData({ ...formData, role: v })}
+                >
+                  <SelectTrigger data-testid="select-agent-role">
+                    <SelectValue placeholder="Select role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="worker">Worker</SelectItem>
+                    <SelectItem value="supervisor">Supervisor</SelectItem>
+                    <SelectItem value="specialist">Specialist</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="memory_mode">Memory Mode</Label>
+                <Select
+                  value={formData.memory_mode}
+                  onValueChange={(v) => setFormData({ ...formData, memory_mode: v })}
+                >
+                  <SelectTrigger data-testid="select-agent-memory-mode">
+                    <SelectValue placeholder="Select memory mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="session">Session</SelectItem>
+                    <SelectItem value="persistent">Persistent</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="daily_token_budget">Daily Token Budget</Label>
+              <Input
+                id="daily_token_budget"
+                type="number"
+                value={formData.daily_token_budget}
+                onChange={(e) => setFormData({ ...formData, daily_token_budget: e.target.value })}
+                placeholder="e.g. 100000"
+                data-testid="input-agent-daily-token-budget"
               />
             </div>
 

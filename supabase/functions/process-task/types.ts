@@ -21,14 +21,17 @@ export interface ToolConfig {
   headers?: Record<string, string>;
   function_name?: string;
   parameters?: Record<string, unknown>;
-  // Handoff tool config
+  // Spawn (sub-agent delegation) tool config
   target_agent_id?: string;
   target_agent_slug?: string;
-  context_variables?: HandoffContextVariable[];
+  skill_id?: string;
+  instructions?: string;
+  context_variables?: SpawnContextVariable[];
+  // Legacy handoff fields (kept for backward compat)
   handoff_instructions?: string;
 }
 
-export interface HandoffContextVariable {
+export interface SpawnContextVariable {
   name: string;
   type: "string" | "number" | "boolean" | "object";
   required: boolean;
@@ -48,6 +51,7 @@ export interface Agent {
   system_prompt: string | null;
   provider_id: string | null;
   model: string | null;
+  role: string | null;
 }
 
 export interface Skill {
@@ -75,7 +79,7 @@ export interface Task {
   status: string;
   agent_id: string | null;
   agent_slug: string | null;
-  master_task_id: string | null;
+  session_id: string | null;
   parent_id: string | null;
   input: { message?: string } | null;
   output: Record<string, unknown> | null;
@@ -87,6 +91,11 @@ export interface Task {
 }
 
 export interface TaskContext {
+  // Delegation (spawn) context
+  _delegated_from?: string;
+  _skill_instructions?: string;
+  _spawn_result?: SpawnResult;
+  // Legacy handoff fields
   _handoff_from?: string;
   _handoff_tool?: string;
   _handoff_instructions?: string;
@@ -94,7 +103,17 @@ export interface TaskContext {
   // Parallel coordination
   _parallel_results?: ParallelTaskResult[];
   _aggregation_instructions?: string;
+  // Approval result
+  _approval_result?: string;
   [key: string]: unknown;
+}
+
+export interface SpawnResult {
+  status: string;
+  output: Record<string, unknown> | null;
+  agent_slug: string;
+  task_id: string;
+  session_id: string;
 }
 
 export interface ParallelTaskResult {

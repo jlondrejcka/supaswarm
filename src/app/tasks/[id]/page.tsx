@@ -10,25 +10,45 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { Task, TaskStatus } from "@/lib/supabase-types"
-import { ArrowLeft, Clock, Bot, MessageSquare, AlertCircle, CheckCircle2, RefreshCw, Terminal, ListTree } from "lucide-react"
+import { ArrowLeft, Clock, Bot, MessageSquare, AlertCircle, CheckCircle2, RefreshCw, Terminal, ListTree, Users, ChevronRight, ShieldAlert, MessageCircle } from "lucide-react"
 import { TaskMessageThread } from "@/components/task-message-thread"
 import { format, formatDistanceToNow } from "date-fns"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
 
 export default function TaskDetailPage() {
   const params = useParams()
   const taskId = params.id as string
   const [task, setTask] = useState<Task | null>(null)
   const [subtasks, setSubtasks] = useState<Task[]>([])
+  const [approvalRequest, setApprovalRequest] = useState<{
+    id: string; action_type: string; payload: Record<string, unknown>;
+    resource_table: string; resource_id: string; status: string;
+    agent_name?: string; agent_slug?: string;
+  } | null>(null)
   const [loading, setLoading] = useState(true)
   const [retrying, setRetrying] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const [showComment, setShowComment] = useState(false)
+  const [commentText, setCommentText] = useState("")
 
   useEffect(() => {
     fetchTask()
     fetchSubtasks()
+    fetchApprovalRequest()
   }, [taskId])
+
+  // Re-fetch approval request when task enters needs_human_review
+  useEffect(() => {
+    if (task?.status === "needs_human_review") {
+      fetchApprovalRequest()
+    } else {
+      setApprovalRequest(null)
+    }
+  }, [task?.status])
 
   useEffect(() => {
     if (!supabase || !taskId) return
@@ -85,7 +105,7 @@ export default function TaskDetailPage() {
       const { data, error } = await supabase
         .from("tasks")
         .select("*")
-        .eq("master_task_id", taskId)
+        .eq("session_id", task?.session_id ?? "")
         .order("created_at", { ascending: true })
 
       if (error) throw error
@@ -117,12 +137,7 @@ export default function TaskDetailPage() {
         return
       }
 
-      // Trigger task processing
-      await supabase.functions.invoke("process-task", {
-        body: { task_id: taskId }
-      })
-
-      // Refresh task data
+      // Task pickup handled by pgmq queue trigger
       await fetchTask()
     } catch (error) {
       console.error("Failed to retry task:", error)
@@ -131,8 +146,73 @@ export default function TaskDetailPage() {
     }
   }
 
-  // Check if task can be retried
-  const canRetry = task?.status && ['failed', 'needs_human_review', 'cancelled'].includes(task.status)
+  async function fetchApprovalRequest() {
+    if (!supabase || !taskId) return
+    try {
+      const { data } = await supabase
+        .from("approval_requests")
+        .select("id, action_type, payload, resource_table, resource_id, status, agents!approval_requests_agent_id_fkey(name, slug)")
+        .eq("task_id", taskId)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (data) {
+        const agentInfo = data.agents as unknown as { name: string; slug: string } | null
+        setApprovalRequest({
+          id: data.id,
+          action_type: data.action_type,
+          payload: (data.payload ?? {}) as Record<string, unknown>,
+          resource_table: data.resource_table,
+          resource_id: data.resource_id,
+          status: data.status,
+          agent_name: agentInfo?.name,
+          agent_slug: agentInfo?.slug,
+        })
+      } else {
+        setApprovalRequest(null)
+      }
+    } catch (error) {
+      console.error("Failed to fetch approval request:", error)
+    }
+  }
+
+  async function handleApproval(decision: "approved" | "rejected") {
+    if (!supabase || !approvalRequest) return
+    setApproving(true)
+    try {
+      const notes = showComment && commentText.trim() ? commentText.trim() : null
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any).rpc("review_approval_request", {
+        p_approval_id: approvalRequest.id,
+        p_decision: decision,
+        p_notes: notes,
+      })
+      if (error) {
+        console.error("Approval error:", error)
+        return
+      }
+      setApprovalRequest(null)
+      setShowComment(false)
+      setCommentText("")
+      await fetchTask()
+    } catch (error) {
+      console.error("Failed to process approval:", error)
+    } finally {
+      setApproving(false)
+    }
+  }
+
+  // Retry: failed, cancelled, or needs_human_review without a pending approval (pure error escalation)
+  const canRetry = task?.status && (
+    ['failed', 'cancelled'].includes(task.status) ||
+    (task.status === 'needs_human_review' && !approvalRequest)
+  )
+  const showApproval = task?.status === 'needs_human_review' && approvalRequest
+
+  // Extract full tool args from intermediate_data.pending_approval
+  const iDataRaw = task?.intermediate_data as Record<string, unknown> | null
+  const pendingApprovalArgs = (iDataRaw?.pending_approval as { args?: Record<string, unknown> })?.args ?? null
 
   if (!isSupabaseConfigured) {
     return <SetupRequired />
@@ -211,7 +291,7 @@ export default function TaskDetailPage() {
               {retrying ? 'Retrying...' : 'Retry'}
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={() => { fetchTask(); fetchSubtasks(); }} data-testid="button-refresh">
+          <Button variant="outline" size="sm" onClick={() => { fetchTask(); fetchSubtasks(); fetchApprovalRequest(); }} data-testid="button-refresh">
             <RefreshCw className="h-4 w-4" />
           </Button>
         </div>
@@ -429,6 +509,21 @@ export default function TaskDetailPage() {
         </div>
 
         <div className="space-y-4">
+          {/* Approval request card — TOP of sidebar when present */}
+          {showApproval && approvalRequest && (
+            <ApprovalCard
+              approvalRequest={approvalRequest}
+              pendingArgs={pendingApprovalArgs}
+              approving={approving}
+              showComment={showComment}
+              commentText={commentText}
+              onToggleComment={setShowComment}
+              onCommentChange={setCommentText}
+              onApprove={() => handleApproval("approved")}
+              onReject={() => handleApproval("rejected")}
+            />
+          )}
+
           <Card>
             <CardContent className="p-4 space-y-4">
               <h3 className="font-semibold">Task Info</h3>
@@ -450,8 +545,28 @@ export default function TaskDetailPage() {
 
                 <div>
                   <span className="text-muted-foreground">Status</span>
-                  <div className="mt-1">
+                  <div className="mt-1 flex items-center gap-2 flex-wrap">
                     <StatusBadge status={task.status as TaskStatus} />
+                    {task.priority && task.priority !== 'medium' && (
+                      <Badge className={
+                        task.priority === 'urgent' ? 'bg-red-500/15 text-red-600 border-red-500/30' :
+                        task.priority === 'high' ? 'bg-orange-500/15 text-orange-600 border-orange-500/30' :
+                        'bg-gray-500/15 text-gray-600 border-gray-500/30'
+                      }>
+                        {task.priority}
+                      </Badge>
+                    )}
+                    {task.mission_status && (
+                      <Badge variant="outline" className={
+                        task.mission_status === 'done' ? 'bg-green-500/15 text-green-600 border-green-500/30' :
+                        task.mission_status === 'in_progress' ? 'bg-amber-500/15 text-amber-600 border-amber-500/30' :
+                        task.mission_status === 'blocked' ? 'bg-red-500/15 text-red-600 border-red-500/30' :
+                        task.mission_status === 'review' ? 'bg-purple-500/15 text-purple-600 border-purple-500/30' :
+                        'bg-blue-500/15 text-blue-600 border-blue-500/30'
+                      }>
+                        {task.mission_status}
+                      </Badge>
+                    )}
                   </div>
                 </div>
 
@@ -478,14 +593,14 @@ export default function TaskDetailPage() {
                   </>
                 )}
 
-                {task.master_task_id && (
+                {task.session_id && (
                   <>
                     <Separator />
                     <div>
-                      <span className="text-muted-foreground">Master Task</span>
-                      <Link href={`/tasks/${task.master_task_id}`}>
+                      <span className="text-muted-foreground">Session</span>
+                      <Link href={`/sessions/${task.session_id}`}>
                         <p className="font-mono text-xs text-primary hover:underline">
-                          {task.master_task_id.slice(0, 8)}...
+                          {task.session_id.slice(0, 8)}...
                         </p>
                       </Link>
                     </div>
@@ -494,6 +609,9 @@ export default function TaskDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Delegation info */}
+          <DelegationInfoCard task={task} />
 
           {output?.model_used && (
             <Card>
@@ -537,5 +655,208 @@ export default function TaskDetailPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── Human-readable labels for action_type ───
+const ACTION_LABELS: Record<string, { verb: string; icon: string }> = {
+  create_agent: { verb: "Create Agent", icon: "🤖" },
+  update_agent: { verb: "Update Agent", icon: "✏️" },
+  create_tool: { verb: "Create Tool", icon: "🔧" },
+  update_tool: { verb: "Update Tool", icon: "🔧" },
+  create_cron: { verb: "Create Cron Job", icon: "⏰" },
+  update_cron: { verb: "Update Cron Job", icon: "⏰" },
+  delete_cron: { verb: "Delete Cron Job", icon: "🗑️" },
+  deploy_function: { verb: "Deploy Function", icon: "🚀" },
+}
+
+// Fields to display prominently per action_type
+const DISPLAY_FIELDS: Record<string, string[]> = {
+  create_agent: ["name", "model", "temperature", "description", "system_prompt"],
+  update_agent: ["name", "model", "temperature", "description", "system_prompt", "is_active"],
+  create_tool: ["name", "type", "description"],
+  update_tool: ["name", "type", "description"],
+  create_cron: ["cron_name", "cron_schedule", "edge_function", "cron_type"],
+  update_cron: ["cron_name", "cron_schedule", "edge_function"],
+  delete_cron: ["cron_id"],
+  deploy_function: ["function_name", "function_slug"],
+}
+
+function ApprovalCard({
+  approvalRequest,
+  pendingArgs,
+  approving,
+  showComment,
+  commentText,
+  onToggleComment,
+  onCommentChange,
+  onApprove,
+  onReject,
+}: {
+  approvalRequest: {
+    id: string; action_type: string; payload: Record<string, unknown>;
+    resource_table: string; resource_id: string; status: string;
+    agent_name?: string; agent_slug?: string;
+  }
+  pendingArgs: Record<string, unknown> | null
+  approving: boolean
+  showComment: boolean
+  commentText: string
+  onToggleComment: (v: boolean) => void
+  onCommentChange: (v: string) => void
+  onApprove: () => void
+  onReject: () => void
+}) {
+  const label = ACTION_LABELS[approvalRequest.action_type] ?? { verb: approvalRequest.action_type.replace(/_/g, " "), icon: "📋" }
+  const fields = DISPLAY_FIELDS[approvalRequest.action_type] ?? []
+  // Merge payload + pendingArgs for display (pendingArgs has the full data)
+  const displayData = pendingArgs ?? approvalRequest.payload ?? {}
+
+  // Build headline: "Rick wants to Create Agent 'Jorge'"
+  const resourceName = (displayData.name as string) || (approvalRequest.payload.name as string) || ""
+  const headline = `${approvalRequest.agent_name || "Agent"} wants to ${label.verb}${resourceName ? `: ${resourceName}` : ""}`
+
+  return (
+    <Card className="border-amber-500/50 bg-amber-500/5">
+      <CardContent className="p-4 space-y-4">
+        {/* Header */}
+        <div className="flex items-start gap-3">
+          <div className="text-2xl mt-0.5">{label.icon}</div>
+          <div className="flex-1 min-w-0">
+            <h3 className="font-semibold text-amber-600 flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 shrink-0" />
+              Approval Required
+            </h3>
+            <p className="text-sm font-medium mt-1">{headline}</p>
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Key fields */}
+        <div className="space-y-3 text-sm">
+          {fields.map((field) => {
+            const value = displayData[field]
+            if (value === undefined || value === null) return null
+            const fieldLabel = field.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+            const isLong = typeof value === "string" && value.length > 80
+
+            return (
+              <div key={field}>
+                <span className="text-muted-foreground text-xs uppercase tracking-wide">{fieldLabel}</span>
+                {isLong ? (
+                  <div className="bg-muted rounded-md p-2 mt-1 max-h-32 overflow-y-auto">
+                    <p className="text-xs whitespace-pre-wrap">{String(value)}</p>
+                  </div>
+                ) : (
+                  <p className="font-medium text-sm">{String(value)}</p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        <Separator />
+
+        {/* Comment checkbox + textarea */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="add-comment"
+              checked={showComment}
+              onCheckedChange={(checked) => onToggleComment(checked === true)}
+            />
+            <Label htmlFor="add-comment" className="text-sm cursor-pointer flex items-center gap-1.5">
+              <MessageCircle className="h-3.5 w-3.5" />
+              Add feedback
+            </Label>
+          </div>
+          {showComment && (
+            <textarea
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+              rows={3}
+              placeholder="Feedback for the agent..."
+              value={commentText}
+              onChange={(e) => onCommentChange(e.target.value)}
+            />
+          )}
+        </div>
+
+        {/* Approve / Reject buttons */}
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+            onClick={onApprove}
+            disabled={approving}
+          >
+            {approving ? "Processing..." : "Approve"}
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            className="flex-1"
+            onClick={onReject}
+            disabled={approving}
+          >
+            Reject
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function DelegationInfoCard({ task }: { task: Task }) {
+  if (task.status !== "pending_subtask" || !task.intermediate_data) return null
+  const iData = task.intermediate_data as Record<string, unknown>
+  if (!iData.delegation) return null
+  const delegation = iData.delegation as Record<string, string>
+
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        <h3 className="font-semibold flex items-center gap-2">
+          <Users className="h-4 w-4 text-indigo-500" />
+          Delegation
+        </h3>
+        <div className="space-y-2 text-sm">
+          {delegation.target_agent_slug && (
+            <div>
+              <span className="text-muted-foreground">Sub-Agent</span>
+              <p className="font-medium">{delegation.target_agent_slug}</p>
+            </div>
+          )}
+          {delegation.child_session_id && (
+            <div>
+              <span className="text-muted-foreground">Child Session</span>
+              <Link href={`/sessions/${delegation.child_session_id}`}>
+                <p className="font-mono text-xs text-primary hover:underline inline-flex items-center gap-1">
+                  {delegation.child_session_id.slice(0, 8)}...
+                  <ChevronRight className="h-3 w-3" />
+                </p>
+              </Link>
+            </div>
+          )}
+          {delegation.child_task_id && (
+            <div>
+              <span className="text-muted-foreground">Child Task</span>
+              <Link href={`/tasks/${delegation.child_task_id}`}>
+                <p className="font-mono text-xs text-primary hover:underline inline-flex items-center gap-1">
+                  {delegation.child_task_id.slice(0, 8)}...
+                  <ChevronRight className="h-3 w-3" />
+                </p>
+              </Link>
+            </div>
+          )}
+          {delegation.delegated_at && (
+            <div>
+              <span className="text-muted-foreground">Delegated</span>
+              <p className="text-xs">{formatDistanceToNow(new Date(delegation.delegated_at), { addSuffix: true })}</p>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }

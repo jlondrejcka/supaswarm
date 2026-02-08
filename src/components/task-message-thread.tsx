@@ -14,7 +14,8 @@ import {
   RefreshCw,
   ChevronRight,
   ChevronDown,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Users
 } from "lucide-react"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
@@ -43,6 +44,8 @@ const messageIcons: Record<MessageType, typeof User> = {
   error: AlertCircle,
   status_change: RefreshCw,
   handoff: ArrowRightLeft,
+  delegation_start: Users,
+  delegation_complete: Users,
 }
 
 const messageColors: Record<MessageType, string> = {
@@ -56,6 +59,8 @@ const messageColors: Record<MessageType, string> = {
   error: "text-red-500",
   status_change: "text-muted-foreground",
   handoff: "text-teal-500",
+  delegation_start: "text-indigo-500",
+  delegation_complete: "text-indigo-400",
 }
 
 const messageBgColors: Record<MessageType, string> = {
@@ -69,6 +74,8 @@ const messageBgColors: Record<MessageType, string> = {
   error: "bg-red-500/10",
   status_change: "bg-muted/50",
   handoff: "bg-teal-500/10",
+  delegation_start: "bg-indigo-500/10",
+  delegation_complete: "bg-indigo-500/5",
 }
 
 const messageLabels: Record<MessageType, string> = {
@@ -82,6 +89,8 @@ const messageLabels: Record<MessageType, string> = {
   error: "Error",
   status_change: "Status",
   handoff: "Handoff",
+  delegation_start: "Delegating",
+  delegation_complete: "Delegation Result",
 }
 
 export function TaskMessageThread({ taskId, variant = "log" }: TaskMessageThreadProps) {

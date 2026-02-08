@@ -37,12 +37,6 @@ const ENV_VAR_NAMES: Record<string, string> = {
 
 const REQUIRED_SECRETS = [
   {
-    name: "SUPABASE_SERVICE_ROLE_KEY",
-    label: "Supabase Service Role Key",
-    description: "Required for task processing. Find it in Supabase Dashboard > Project Settings > API",
-    helpUrl: "https://supabase.com/dashboard/project/_/settings/api",
-  },
-  {
     name: "XAI_API_KEY",
     label: "xAI API Key",
     description: "For Grok models. Get it from x.ai",
@@ -117,14 +111,10 @@ export default function SettingsPage() {
   }
 
   async function fetchVaultSecrets() {
-    if (!supabase) {
-      setVaultLoading(false)
-      return
-    }
-    
     try {
-      const { data, error } = await supabase.rpc("list_vault_secrets")
-      if (error) throw error
+      const res = await fetch("/api/vault")
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
       setVaultSecrets(data || [])
     } catch (error) {
       console.error("Failed to fetch vault secrets:", error)
@@ -175,13 +165,12 @@ export default function SettingsPage() {
       const envVarName = ENV_VAR_NAMES[selectedProvider.name] || `${selectedProvider.name.toUpperCase()}_API_KEY`
       
       if (formData.api_key.trim()) {
-        const { error: vaultError } = await supabase.rpc("upsert_vault_secret", {
-          secret_name: envVarName,
-          secret_value: formData.api_key.trim(),
-          secret_description: `API key for ${selectedProvider.display_name}`,
+        const vaultRes = await fetch("/api/vault", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ secret_name: envVarName, secret_value: formData.api_key.trim() }),
         })
-        
-        if (vaultError) throw vaultError
+        if (!vaultRes.ok) throw new Error(await vaultRes.text())
         
         await supabase
           .from("llm_providers")
@@ -245,13 +234,12 @@ export default function SettingsPage() {
     
     setSavingQuickSecret(secretName)
     try {
-      const { error } = await supabase.rpc("upsert_vault_secret", {
-        secret_name: secretName,
-        secret_value: value.trim(),
-        secret_description: description,
+      const res = await fetch("/api/vault", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret_name: secretName, secret_value: value.trim() }),
       })
-      
-      if (error) throw error
+      if (!res.ok) throw new Error(await res.text())
       
       setStatusMessage({ type: "success", text: `${secretName} saved` })
       setQuickSecretValues(prev => ({ ...prev, [secretName]: "" }))
@@ -269,13 +257,12 @@ export default function SettingsPage() {
     
     setSavingSecret(true)
     try {
-      const { error } = await supabase.rpc("upsert_vault_secret", {
-        secret_name: newSecretData.name.trim(),
-        secret_value: newSecretData.value.trim(),
-        secret_description: newSecretData.description.trim() || undefined,
+      const res = await fetch("/api/vault", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret_name: newSecretData.name.trim(), secret_value: newSecretData.value.trim() }),
       })
-      
-      if (error) throw error
+      if (!res.ok) throw new Error(await res.text())
       
       setStatusMessage({ type: "success", text: `${newSecretData.name} saved to Vault` })
       
@@ -294,11 +281,12 @@ export default function SettingsPage() {
     if (!supabase) return
     
     try {
-      const { error } = await supabase.rpc("delete_vault_secret", {
-        secret_name: secretName,
+      const res = await fetch("/api/vault", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret_name: secretName }),
       })
-      
-      if (error) throw error
+      if (!res.ok) throw new Error(await res.text())
       
       setStatusMessage({ type: "success", text: `${secretName} deleted` })
       

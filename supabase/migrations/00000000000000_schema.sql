@@ -5,8 +5,11 @@
 -- =============================================
 -- EXTENSIONS
 -- =============================================
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS "pgmq";
+
+-- Make extension functions accessible without schema prefix
+SET search_path TO public, extensions;
 
 -- =============================================
 -- LLM PROVIDERS

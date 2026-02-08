@@ -24,8 +24,8 @@ import {
 } from "@/components/ui/select"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
-import type { Tool, ToolType, Agent, HandoffContextVariable, Json } from "@/lib/supabase-types"
-import { Plus, Wrench, Globe, Server, Database, Save, Zap, CheckCircle, XCircle, Loader2, ArrowRightLeft, Trash2, Bot } from "lucide-react"
+import type { Tool, ToolType, Agent, SpawnContextVariable, Json, Skill } from "@/lib/supabase-types"
+import { Plus, Wrench, Globe, Server, Database, Save, Zap, CheckCircle, XCircle, Loader2, Users, Trash2, Bot } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 
@@ -34,7 +34,7 @@ const toolTypeIcons: Record<ToolType, typeof Wrench> = {
   mcp_server: Server,
   http_api: Globe,
   supabase_rpc: Database,
-  handoff: ArrowRightLeft
+  spawn: Users,
 }
 
 const toolTypeLabels: Record<ToolType, string> = {
@@ -42,7 +42,7 @@ const toolTypeLabels: Record<ToolType, string> = {
   mcp_server: "MCP Server",
   http_api: "HTTP API",
   supabase_rpc: "Supabase RPC",
-  handoff: "Agent Handoff"
+  spawn: "Sub-Agent",
 }
 
 export default function ToolsPage() {
@@ -58,6 +58,9 @@ export default function ToolsPage() {
     description: "",
     type: "mcp_server" as ToolType,
     config: "{}",
+    execution_mode: "",
+    requires_approval: false,
+    rate_limit_per_min: "",
   })
   
   // MCP verification state
@@ -72,16 +75,19 @@ export default function ToolsPage() {
     server_info?: Record<string, unknown>
   } | null>(null)
   
-  // Handoff configuration state
+  // Sub-Agent (spawn) configuration state
   const [agents, setAgents] = useState<Agent[]>([])
+  const [skills, setSkills] = useState<Skill[]>([])
   const [toolAgents, setToolAgents] = useState<Record<string, string[]>>({})
   const [targetAgentId, setTargetAgentId] = useState("")
-  const [handoffInstructions, setHandoffInstructions] = useState("")
-  const [contextVariables, setContextVariables] = useState<HandoffContextVariable[]>([])
+  const [spawnSkillId, setSpawnSkillId] = useState("")
+  const [spawnInstructions, setSpawnInstructions] = useState("")
+  const [contextVariables, setContextVariables] = useState<SpawnContextVariable[]>([])
 
   useEffect(() => {
     fetchTools()
     fetchAgents()
+    fetchSkills()
   }, [])
 
   async function fetchTools() {
@@ -131,6 +137,16 @@ export default function ToolsPage() {
     }
   }
 
+  async function fetchSkills() {
+    if (!supabase) return
+    try {
+      const { data } = await supabase.from("skills").select("*").eq("is_active", true).order("name")
+      setSkills(data || [])
+    } catch (error) {
+      console.error("Failed to fetch skills:", error)
+    }
+  }
+
   function generateSlug(name: string) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
   }
@@ -143,13 +159,17 @@ export default function ToolsPage() {
       description: "",
       type: "mcp_server",
       config: "{}",
+      execution_mode: "",
+      requires_approval: false,
+      rate_limit_per_min: "",
     })
     setMcpUrl("")
     setMcpApiKey("")
     setVerifyResult(null)
-    // Reset handoff state
+    // Reset spawn state
     setTargetAgentId("")
-    setHandoffInstructions("")
+    setSpawnSkillId("")
+    setSpawnInstructions("")
     setContextVariables([])
     setDialogOpen(true)
   }
@@ -162,20 +182,25 @@ export default function ToolsPage() {
       description: tool.description || "",
       type: tool.type as ToolType,
       config: JSON.stringify(tool.config, null, 2),
+      execution_mode: tool.execution_mode || "",
+      requires_approval: tool.requires_approval || false,
+      rate_limit_per_min: tool.rate_limit_per_min?.toString() || "",
     })
     // Extract MCP URL from config if it exists
     const config = tool.config as Record<string, unknown>
     setMcpUrl((config?.mcp_url as string) || "")
     setMcpApiKey("")
     setVerifyResult(null)
-    // Extract handoff config if it exists
-    if (tool.type === "handoff") {
+    // Extract spawn/handoff config if it exists
+    if (tool.type === "spawn" || tool.type === "handoff") {
       setTargetAgentId((config?.target_agent_id as string) || "")
-      setHandoffInstructions((config?.handoff_instructions as string) || "")
-      setContextVariables((config?.context_variables as HandoffContextVariable[]) || [])
+      setSpawnSkillId((config?.skill_id as string) || "")
+      setSpawnInstructions((config?.instructions as string) || (config?.handoff_instructions as string) || "")
+      setContextVariables((config?.context_variables as SpawnContextVariable[]) || [])
     } else {
       setTargetAgentId("")
-      setHandoffInstructions("")
+      setSpawnSkillId("")
+      setSpawnInstructions("")
       setContextVariables([])
     }
     setDialogOpen(true)
@@ -237,13 +262,14 @@ export default function ToolsPage() {
       let configJson: Record<string, unknown> = {}
       
       // Build config based on tool type
-      if (formData.type === "handoff") {
+      if (formData.type === "spawn") {
         const targetAgent = agents.find(a => a.id === targetAgentId)
         configJson = {
           target_agent_id: targetAgentId,
           target_agent_slug: targetAgent?.slug || "",
+          skill_id: spawnSkillId || undefined,
+          instructions: spawnInstructions || undefined,
           context_variables: contextVariables,
-          handoff_instructions: handoffInstructions || undefined,
         }
       } else {
         try {
@@ -260,6 +286,9 @@ export default function ToolsPage() {
         type: formData.type,
         config: configJson as Json,
         is_active: true,
+        execution_mode: formData.execution_mode || null,
+        requires_approval: formData.requires_approval || false,
+        rate_limit_per_min: formData.rate_limit_per_min ? parseInt(formData.rate_limit_per_min, 10) : null,
       }
 
       if (editingTool) {
@@ -291,7 +320,7 @@ export default function ToolsPage() {
     ])
   }
 
-  function updateContextVariable(index: number, field: keyof HandoffContextVariable, value: unknown) {
+  function updateContextVariable(index: number, field: keyof SpawnContextVariable, value: unknown) {
     const updated = [...contextVariables]
     updated[index] = { ...updated[index], [field]: value }
     setContextVariables(updated)
@@ -362,7 +391,7 @@ export default function ToolsPage() {
         >
           All ({tools.length})
         </Button>
-        {(["mcp_server", "http_api", "supabase_rpc", "internal", "handoff"] as ToolType[]).map((type) => (
+        {(["mcp_server", "http_api", "supabase_rpc", "internal", "spawn"] as ToolType[]).map((type) => (
           <Button
             key={type}
             variant={filter === type ? "default" : "outline"}
@@ -438,6 +467,34 @@ export default function ToolsPage() {
                     <Badge variant="outline">
                       {toolTypeLabels[tool.type as ToolType] || tool.type}
                     </Badge>
+                    {tool.execution_mode && tool.execution_mode !== tool.type && (
+                      <Badge 
+                        variant="outline" 
+                        className={`text-xs ${
+                          tool.execution_mode === "internal" 
+                            ? "bg-gray-500/10 text-gray-600 dark:text-gray-400 border-gray-500/30"
+                            : tool.execution_mode === "edge_function"
+                            ? "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/30"
+                            : tool.execution_mode === "mcp_server"
+                            ? "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/30"
+                            : tool.execution_mode === "http_api"
+                            ? "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30"
+                            : ""
+                        }`}
+                      >
+                        {tool.execution_mode === "edge_function" ? "Edge Fn" : tool.execution_mode}
+                      </Badge>
+                    )}
+                    {tool.requires_approval && (
+                      <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30">
+                        Approval Required
+                      </Badge>
+                    )}
+                    {tool.created_by && (
+                      <Badge variant="outline" className="text-xs bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/30">
+                        Agent Created
+                      </Badge>
+                    )}
                     <span className="text-xs text-muted-foreground font-mono">{tool.slug}</span>
                     {tool.type === "mcp_server" && (tool.config as Record<string, unknown>)?.tools && Array.isArray((tool.config as Record<string, unknown>).tools) ? (
                       <Badge variant="secondary" className="text-xs">
@@ -445,14 +502,19 @@ export default function ToolsPage() {
                         {((tool.config as Record<string, unknown>).tools as unknown[]).length} MCP tools
                       </Badge>
                     ) : null}
-                    {tool.type === "handoff" && (tool.config as Record<string, unknown>)?.target_agent_slug ? (
+                    {(tool.type === "spawn" || tool.type === "handoff") && (tool.config as Record<string, unknown>)?.target_agent_slug ? (
                       <Badge variant="secondary" className="text-xs">
-                        <ArrowRightLeft className="h-3 w-3 mr-1" />
+                        <Users className="h-3 w-3 mr-1" />
                         → {(tool.config as Record<string, unknown>).target_agent_slug as string}
                       </Badge>
                     ) : null}
                   </div>
-                  {tool.type === "mcp_server" && (tool.config as Record<string, unknown>)?.tools && Array.isArray((tool.config as Record<string, unknown>).tools) && (
+                  {tool.rate_limit_per_min && (
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Rate: {tool.rate_limit_per_min}/min
+                    </div>
+                  )}
+                  {tool.type === "mcp_server" && (tool.config as Record<string, unknown>)?.tools && Array.isArray((tool.config as Record<string, unknown>).tools) ? (
                     <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                       {((tool.config as Record<string, unknown>).tools as Array<{name: string; description?: string}>).map((mcpTool) => (
                         <Badge key={mcpTool.name} variant="outline" className="text-xs gap-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
@@ -461,7 +523,7 @@ export default function ToolsPage() {
                         </Badge>
                       ))}
                     </div>
-                  )}
+                  ) : null}
                   {toolAgents[tool.id]?.length > 0 && (
                     <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                       {toolAgents[tool.id].map((agentId) => {
@@ -519,20 +581,40 @@ export default function ToolsPage() {
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="type">Tool Type *</Label>
-              <Select value={formData.type} onValueChange={(v) => setFormData({ ...formData, type: v as ToolType })}>
-                <SelectTrigger data-testid="select-tool-type">
-                  <SelectValue placeholder="Select type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="mcp_server">MCP Server</SelectItem>
-                  <SelectItem value="http_api">HTTP API</SelectItem>
-                  <SelectItem value="supabase_rpc">Supabase RPC</SelectItem>
-                  <SelectItem value="internal">Internal</SelectItem>
-                  <SelectItem value="handoff">Agent Handoff</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="type">Tool Type *</Label>
+                <Select value={formData.type} onValueChange={(v) => setFormData({ ...formData, type: v as ToolType })}>
+                  <SelectTrigger data-testid="select-tool-type">
+                    <SelectValue placeholder="Select type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="mcp_server">MCP Server</SelectItem>
+                    <SelectItem value="http_api">HTTP API</SelectItem>
+                    <SelectItem value="supabase_rpc">Supabase RPC</SelectItem>
+                    <SelectItem value="internal">Internal</SelectItem>
+                    <SelectItem value="spawn">Sub-Agent</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="execution_mode">Execution Mode</Label>
+                <Select 
+                  value={formData.execution_mode} 
+                  onValueChange={(v) => setFormData({ ...formData, execution_mode: v })}
+                >
+                  <SelectTrigger data-testid="select-execution-mode">
+                    <SelectValue placeholder="Select execution mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">None</SelectItem>
+                    <SelectItem value="internal">Internal</SelectItem>
+                    <SelectItem value="edge_function">Edge Function</SelectItem>
+                    <SelectItem value="mcp_server">MCP Server</SelectItem>
+                    <SelectItem value="http_api">HTTP API</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="description">Description</Label>
@@ -542,6 +624,29 @@ export default function ToolsPage() {
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 placeholder="What does this tool do?"
                 data-testid="input-tool-description"
+              />
+            </div>
+            <div className="flex items-center justify-between space-x-2">
+              <div className="space-y-0.5">
+                <Label htmlFor="requires_approval">Requires Approval</Label>
+                <p className="text-xs text-muted-foreground">Tool execution requires user approval</p>
+              </div>
+              <Switch
+                id="requires_approval"
+                checked={formData.requires_approval}
+                onCheckedChange={(checked) => setFormData({ ...formData, requires_approval: checked })}
+                data-testid="switch-requires-approval"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="rate_limit_per_min">Rate Limit</Label>
+              <Input
+                id="rate_limit_per_min"
+                type="number"
+                value={formData.rate_limit_per_min}
+                onChange={(e) => setFormData({ ...formData, rate_limit_per_min: e.target.value })}
+                placeholder="Requests per minute"
+                data-testid="input-rate-limit"
               />
             </div>
             {/* MCP Server specific fields */}
@@ -643,19 +748,19 @@ export default function ToolsPage() {
               </div>
             )}
             
-            {/* Handoff specific fields */}
-            {formData.type === "handoff" && (
+            {/* Sub-Agent (spawn) specific fields */}
+            {formData.type === "spawn" && (
               <div className="space-y-4 p-4 rounded-lg border bg-muted/30">
                 <div className="flex items-center gap-2 text-sm font-medium">
-                  <ArrowRightLeft className="h-4 w-4" />
-                  Agent Handoff Configuration
+                  <Users className="h-4 w-4" />
+                  Sub-Agent Configuration
                 </div>
                 
                 <div className="space-y-2">
                   <Label htmlFor="target_agent">Target Agent *</Label>
                   <Select value={targetAgentId} onValueChange={setTargetAgentId}>
                     <SelectTrigger data-testid="select-target-agent">
-                      <SelectValue placeholder="Select agent to hand off to" />
+                      <SelectValue placeholder="Select sub-agent" />
                     </SelectTrigger>
                     <SelectContent>
                       {agents.map((agent) => (
@@ -668,14 +773,34 @@ export default function ToolsPage() {
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="handoff_instructions">Handoff Instructions</Label>
+                  <Label htmlFor="spawn_skill">Skill (optional)</Label>
+                  <Select value={spawnSkillId} onValueChange={setSpawnSkillId}>
+                    <SelectTrigger data-testid="select-spawn-skill">
+                      <SelectValue placeholder="No skill — use agent defaults" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {skills.map((skill) => (
+                        <SelectItem key={skill.id} value={skill.id}>
+                          {skill.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Skill instructions are injected into the sub-agent&apos;s prompt
+                  </p>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="spawn_instructions">Instructions (fallback if no skill)</Label>
                   <textarea
-                    id="handoff_instructions"
-                    value={handoffInstructions}
-                    onChange={(e) => setHandoffInstructions(e.target.value)}
-                    placeholder="Additional context or instructions for the target agent..."
+                    id="spawn_instructions"
+                    value={spawnInstructions}
+                    onChange={(e) => setSpawnInstructions(e.target.value)}
+                    placeholder="Additional instructions for the sub-agent..."
                     className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    data-testid="input-handoff-instructions"
+                    data-testid="input-spawn-instructions"
                   />
                 </div>
                 
@@ -696,7 +821,7 @@ export default function ToolsPage() {
                   
                   {contextVariables.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
-                      No context variables defined. Add variables that the LLM must extract for the handoff.
+                      No context variables. Add variables the LLM must extract before delegating.
                     </p>
                   ) : (
                     <div className="space-y-3">
@@ -763,7 +888,7 @@ export default function ToolsPage() {
               </div>
             )}
             
-            {formData.type !== "handoff" && (
+            {formData.type !== "spawn" && (
             <div className="space-y-2">
               <Label htmlFor="config">
                 {formData.type === "mcp_server" ? "Configuration (auto-populated)" : "Configuration (JSON)"}
@@ -785,7 +910,7 @@ export default function ToolsPage() {
             </Button>
             <Button 
               onClick={handleSave} 
-              disabled={saving || !formData.name || (formData.type === "handoff" && !targetAgentId)} 
+              disabled={saving || !formData.name || (formData.type === "spawn" && !targetAgentId)} 
               data-testid="button-save"
             >
               <Save className="h-4 w-4" />

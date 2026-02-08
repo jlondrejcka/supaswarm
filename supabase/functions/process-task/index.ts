@@ -1,17 +1,20 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
-import type { Tool, Agent, LLMProvider, LLMToolDefinition, ToolCall, TaskContext, Skill, ParallelTaskResult } from "./types.ts";
+import type { Tool, Agent, LLMProvider, LLMToolDefinition, ToolCall, TaskContext, Skill, ParallelTaskResult, SpawnResult } from "./types.ts";
 import { executeMcpTool, getMcpUrl, hasPreDefinedTools } from "./mcp-client.ts";
 import { callLLM, synthesizeResponse, getVaultKeyName, ConversationMessage } from "./llm-providers.ts";
 import { createTaskLogger } from "./task-logger.ts";
 import { fetchAgentSkills, getSkillListForPrompt, getLoadSkillToolDefinition, loadSkill } from "./skill-loader.ts";
 import { createErrorHandler, type ErrorHandler } from "./error-handler.ts";
+import { handleSelfManagementTool, SELF_MANAGEMENT_TOOLS, SELF_MANAGEMENT_TOOL_DEFINITIONS } from "./self-management-tools.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+const MAX_SPAWN_DEPTH = 3;
 
 // Built-in tool definitions for parallel coordination
 function getCreateAggregatorTaskToolDefinition(): LLMToolDefinition {
@@ -142,6 +145,24 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Check if resuming from a blocking approval
+    const approvalResult = (task.intermediate_data as Record<string, any>)?.approval_result;
+    if (approvalResult) {
+      // Inject approval result into context for the LLM
+      const existingContext = (task.context || {}) as Record<string, unknown>;
+      task.context = {
+        ...existingContext,
+        _approval_result: `Your previous request (${approvalResult.action_type}) was ${approvalResult.status}.${
+          approvalResult.review_notes ? ' Notes: ' + approvalResult.review_notes : ''
+        } Continue with your task.`
+      };
+      // Clear approval data
+      await supabase.from("tasks").update({
+        intermediate_data: { ...(task.intermediate_data as Record<string, any> || {}), approval_result: null, pending_approval: null }
+      }).eq("id", task_id);
+      console.log("[MAIN] Resumed from approval", { action_type: approvalResult.action_type, status: approvalResult.status });
+    }
+
     // Initialize logger and error handler
     const taskStartTime = Date.now();
     const logger = createTaskLogger(supabase, task_id, taskStartTime);
@@ -154,12 +175,12 @@ Deno.serve(async (req) => {
     // Fetch conversation history if this task is part of a conversation
     let conversationHistory: ConversationMessage[] = [];
     
-    if (task.master_task_id) {
-      // Get all tasks in this conversation (including the master task itself)
+    if (task.session_id) {
+      // Get all tasks in this session
       const { data: conversationTasks } = await supabase
         .from("tasks")
         .select("id")
-        .or(`master_task_id.eq.${task.master_task_id},id.eq.${task.master_task_id}`)
+        .eq("session_id", task.session_id)
         .neq("id", task_id) // Exclude current task
         .order("created_at", { ascending: true });
 
@@ -167,7 +188,7 @@ Deno.serve(async (req) => {
         const taskIds = conversationTasks.map(t => t.id);
         
         console.log("[MAIN] Found conversation tasks", {
-          master_task_id: task.master_task_id,
+          session_id: task.session_id,
           task_count: taskIds.length,
           task_ids: taskIds,
         });
@@ -193,7 +214,7 @@ Deno.serve(async (req) => {
       }
 
       console.log("[MAIN] Loaded conversation history", {
-        master_task_id: task.master_task_id,
+        session_id: task.session_id,
         history_messages: conversationHistory.length,
       });
     }
@@ -318,6 +339,8 @@ Deno.serve(async (req) => {
     const toolDefinitions: LLMToolDefinition[] = [];
     
     for (const tool of tools) {
+      // Skip internal tools — they're UI display only; actual definitions injected via SELF_MANAGEMENT_TOOL_DEFINITIONS
+      if (tool.type === "internal") continue;
       if (tool.type === "mcp_server") {
         const config = tool.config;
         const mcpTools = hasPreDefinedTools(config) ? config.tools! : [];
@@ -338,13 +361,18 @@ Deno.serve(async (req) => {
             },
           });
         }
-      } else if (tool.type === "handoff") {
-        // Handoff tool - build parameters from context_variables
+      } else if (tool.type === "spawn" || tool.type === "handoff") {
+        // Spawn (sub-agent delegation) tool - build parameters from context_variables
         const config = tool.config;
         const contextVars = config.context_variables || [];
         
-        const properties: Record<string, unknown> = {};
-        const required: string[] = [];
+        const properties: Record<string, unknown> = {
+          message: {
+            type: "string",
+            description: "Task instructions for the sub-agent — describe what you need done",
+          },
+        };
+        const required: string[] = ["message"];
         
         for (const cv of contextVars) {
           properties[cv.name] = {
@@ -360,18 +388,19 @@ Deno.serve(async (req) => {
           type: "function",
           function: {
             name: tool.slug,
-            description: tool.description || `Hand off to ${config.target_agent_slug}`,
+            description: tool.description || `Delegate task to ${config.target_agent_slug}`,
             parameters: {
               type: "object",
               properties,
-              required: required.length > 0 ? required : undefined,
+              required,
             },
           },
         });
         
-        console.log("[MAIN] Added handoff tool", {
+        console.log("[MAIN] Added spawn tool", {
           tool_slug: tool.slug,
           target_agent: config.target_agent_slug,
+          skill_id: config.skill_id,
           context_vars: contextVars.map(cv => cv.name),
         });
       } else {
@@ -406,19 +435,29 @@ Deno.serve(async (req) => {
     toolDefinitions.push(getCreateAggregatorTaskToolDefinition());
     console.log("[MAIN] Added parallel coordination tools");
 
+    // Self-management tools (Rick only — agent.role === 'system')
+    if (agent.role === 'system') {
+      toolDefinitions.push(...SELF_MANAGEMENT_TOOL_DEFINITIONS);
+      console.log("[MAIN] Added self-management tools for system agent", { agent_slug: agent.slug, tool_count: SELF_MANAGEMENT_TOOL_DEFINITIONS.length });
+    }
+
     console.log("[MAIN] Tool definitions built", {
       count: toolDefinitions.length,
       names: toolDefinitions.map(t => t.function.name),
     });
 
-    // Build system prompt with handoff context if present
+    // Build system prompt with delegation/handoff context if present
     let systemPrompt = agent.system_prompt || "";
     const taskContext = task.context as TaskContext | null;
     
     if (taskContext && Object.keys(taskContext).length > 0) {
       const contextLines: string[] = [];
       
-      // Add handoff metadata
+      // Add delegation metadata
+      if (taskContext._delegated_from) {
+        contextLines.push(`You were delegated this task by the "${taskContext._delegated_from}" agent.`);
+      }
+      // Legacy handoff metadata
       if (taskContext._handoff_from) {
         contextLines.push(`You received this conversation from the "${taskContext._handoff_from}" agent.`);
       }
@@ -437,12 +476,20 @@ Deno.serve(async (req) => {
       }
       
       if (contextLines.length > 0) {
-        systemPrompt = `${systemPrompt}\n\n---\nHandoff Context:\n${contextLines.join("\n")}`;
-        console.log("[MAIN] Added handoff context to system prompt", {
-          from: taskContext._handoff_from,
+        systemPrompt = `${systemPrompt}\n\n---\nDelegation Context:\n${contextLines.join("\n")}`;
+        console.log("[MAIN] Added delegation context to system prompt", {
+          from: taskContext._delegated_from || taskContext._handoff_from,
           context_keys: Object.keys(taskContext).filter(k => !k.startsWith("_")),
         });
       }
+    }
+    
+    // Inject skill instructions for spawned tasks
+    if (taskContext?._skill_instructions) {
+      systemPrompt += `\n\n---\n## Task Instructions\n${taskContext._skill_instructions}`;
+      console.log("[MAIN] Injected skill instructions", {
+        instructions_length: taskContext._skill_instructions.length,
+      });
     }
 
     // Add available skills to system prompt
@@ -451,6 +498,32 @@ Deno.serve(async (req) => {
       console.log("[MAIN] Added skills to system prompt", {
         skill_count: skills.length,
         skill_ids: skills.map(s => s.skill_id),
+      });
+    }
+
+    // Inject spawn result if present (parent task resuming after delegation)
+    if (taskContext?._spawn_result) {
+      const sr = taskContext._spawn_result as SpawnResult;
+
+      // Fetch child task output if not in spawn result
+      let childOutput = sr.output;
+      if (!childOutput && sr.task_id) {
+        const { data: childTask } = await supabase
+          .from("tasks")
+          .select("output")
+          .eq("id", sr.task_id)
+          .single();
+        childOutput = childTask?.output;
+      }
+
+      const outputText = childOutput?.response || JSON.stringify(childOutput, null, 2);
+      systemPrompt += `\n\n---\n## Delegation Result (DO NOT re-delegate — use this result)\nAgent "${sr.agent_slug}" completed with status: ${sr.status}\nResult:\n${outputText}`;
+      console.log("[MAIN] Injected spawn result", { from_agent: sr.agent_slug, status: sr.status, has_output: !!childOutput });
+      
+      // Log delegation complete
+      await logger.logDelegationComplete(sr.agent_slug, sr as unknown as Record<string, unknown>, {
+        child_task_id: sr.task_id,
+        child_session_id: sr.session_id,
       });
     }
 
@@ -504,51 +577,120 @@ Deno.serve(async (req) => {
       has_handoff_context: !!(taskContext && taskContext._handoff_from),
     });
 
-    // Call LLM
+    // Call LLM with multi-turn tool loop
     const model = agent.model || provider.default_model;
     let llmResponse = "";
     let toolCalls: ToolCall[] = [];
+    const MAX_TOOL_ITERATIONS = 10;
+    let iteration = 0;
+    let totalToolCallsCount = 0;
 
-    try {
-      const result = await callLLM(
-        provider,
-        apiKey,
-        model,
-        systemPrompt,
-        userMessage,
-        toolDefinitions.length > 0 ? toolDefinitions : undefined,
-        conversationHistory.length > 0 ? conversationHistory : undefined,
-      );
-      llmResponse = result.response;
-      toolCalls = result.toolCalls;
+    // Build initial messages for the agentic loop
+    const loopMessages: LLMMessage[] = [];
+    const today = new Date().toDateString();
+    if (systemPrompt) {
+      loopMessages.push({ role: "system", content: `Current date: ${today}\n\n${systemPrompt}` });
+    }
+    if (conversationHistory.length > 0) {
+      for (const msg of conversationHistory) {
+        loopMessages.push({ role: msg.role, content: msg.content });
+      }
+    }
+    loopMessages.push({ role: "user", content: userMessage });
+
+    // --- Agentic tool loop ---
+    while (iteration < MAX_TOOL_ITERATIONS) {
+      iteration++;
+
+      await logger.logThinking(iteration === 1 ? "Calling LLM..." : `Calling LLM (iteration ${iteration})...`, {
+        step: "llm_call_init",
+        provider: provider.name,
+        model: agent.model || provider.default_model,
+        tool_count: toolDefinitions.length,
+        has_handoff_context: !!(taskContext && taskContext._handoff_from),
+        iteration,
+      });
+
+      try {
+        const baseUrl = (provider as any).base_url || "https://api.openai.com/v1";
+        // Call OpenAI-compatible API directly with full message history
+        const fetchResponse = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            messages: loopMessages,
+            tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
+            tool_choice: toolDefinitions.length > 0 ? "auto" : undefined,
+          }),
+        });
+
+        if (!fetchResponse.ok) {
+          const errorText = await fetchResponse.text();
+          throw new Error(`OpenAI API error: ${fetchResponse.status} - ${errorText}`);
+        }
+
+        const data = await fetchResponse.json();
+        const choice = data.choices?.[0];
+        llmResponse = choice?.message?.content || "";
+        toolCalls = choice?.message?.tool_calls || [];
+
+        console.log("[MAIN] LLM response", {
+          iteration,
+          has_content: !!llmResponse,
+          tool_call_count: toolCalls.length,
+          usage: data.usage,
+        });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        if (iteration === 1) {
+          const result = await errorHandler.handleLLMError(errorMsg, {
+            agent_slug: agent.slug,
+            additional_context: { provider: provider.name, model },
+          });
+          await logger.logError(`LLM call failed: ${errorMsg}`, { review_id: result.review_id });
+          return new Response(
+            JSON.stringify({ error: errorMsg, escalated_to_human_review: result.success }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 },
+          );
+        }
+        // On later iterations, break loop with error
+        llmResponse = `Tool loop error on iteration ${iteration}: ${errorMsg}`;
+        break;
+      }
 
       await logger.logThinking(`LLM responded${toolCalls.length > 0 ? ` with ${toolCalls.length} tool call(s)` : ""}`, {
         step: "llm_response_received",
         has_tool_calls: toolCalls.length > 0,
         tool_call_count: toolCalls.length,
+        iteration,
       });
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      const result = await errorHandler.handleLLMError(errorMsg, {
-        agent_slug: agent.slug,
-        additional_context: { provider: provider.name, model },
-      });
-      await logger.logError(`LLM call failed: ${errorMsg}`, { review_id: result.review_id });
-      return new Response(
-        JSON.stringify({ error: errorMsg, escalated_to_human_review: result.success }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 },
-      );
-    }
 
-    // Process tool calls
-    if (toolCalls.length > 0) {
-      const toolResults: string[] = [];
-      let handoffExecuted = false;
+      // No tool calls = LLM is done, break
+      if (toolCalls.length === 0) break;
+
+      // Append assistant message with tool_calls to history
+      loopMessages.push({
+        role: "assistant",
+        content: llmResponse || "",
+        tool_calls: toolCalls.map(tc => ({
+          id: tc.id,
+          type: "function",
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        })),
+      });
+
+      // Execute tool calls
+      let delegationExecuted = false;
 
       for (const toolCall of toolCalls) {
         const toolCallStart = Date.now();
         const toolName = toolCall.function.name;
         const toolArgs = JSON.parse(toolCall.function.arguments || "{}");
+        totalToolCallsCount++;
 
         await logger.logToolCall(toolName, toolCall.id, toolArgs);
 
@@ -574,7 +716,7 @@ Deno.serve(async (req) => {
           
           const duration = Date.now() - toolCallStart;
           await logger.logToolResult(toolName, toolCall.id, toolResult, !!skill, duration);
-          toolResults.push(toolResult);
+          loopMessages.push({ role: "tool", content: toolResult, tool_call_id: toolCall.id });
           continue;
         }
 
@@ -594,12 +736,12 @@ Deno.serve(async (req) => {
           if (!targetAgent) {
             toolResult = `Error: Agent not found (${targetAgentId})`;
           } else {
-            const masterTaskId = task.master_task_id || task.id;
+            const sessionId = task.session_id;
             
             const { data: newTask, error: createError } = await supabase
               .from("tasks")
               .insert({
-                master_task_id: masterTaskId,
+                session_id: sessionId,
                 parent_id: task_id,
                 agent_id: targetAgent.id,
                 agent_slug: targetAgent.slug,
@@ -627,7 +769,7 @@ Deno.serve(async (req) => {
           
           const duration = Date.now() - toolCallStart;
           await logger.logToolResult(toolName, toolCall.id, toolResult, !toolResult.includes("Error"), duration);
-          toolResults.push(toolResult);
+          loopMessages.push({ role: "tool", content: toolResult, tool_call_id: toolCall.id });
           continue;
         }
 
@@ -649,12 +791,12 @@ Deno.serve(async (req) => {
           } else if (!dependentTaskIds || dependentTaskIds.length === 0) {
             toolResult = `Error: dependent_task_ids is required`;
           } else {
-            const masterTaskId = task.master_task_id || task.id;
+            const sessionId = task.session_id;
             
             const { data: newTask, error: createError } = await supabase
               .from("tasks")
               .insert({
-                master_task_id: masterTaskId,
+                session_id: sessionId,
                 parent_id: task_id,
                 agent_id: targetAgent.id,
                 agent_slug: targetAgent.slug,
@@ -684,7 +826,46 @@ Deno.serve(async (req) => {
           
           const duration = Date.now() - toolCallStart;
           await logger.logToolResult(toolName, toolCall.id, toolResult, !toolResult.includes("Error"), duration);
-          toolResults.push(toolResult);
+          loopMessages.push({ role: "tool", content: toolResult, tool_call_id: toolCall.id });
+          continue;
+        }
+
+        // Handle self-management tools (Rick only)
+        if (SELF_MANAGEMENT_TOOLS.includes(toolName as any)) {
+          try {
+            const { result, needsApproval, blocking } = await handleSelfManagementTool(
+              toolName, toolArgs, {
+                supabase, agentId: agent.id, agentSlug: agent.slug,
+                taskId: task_id, sessionId: task.session_id || ""
+              }
+            );
+            toolResult = result;
+
+            if (needsApproval && blocking) {
+              // BLOCKING approval: task suspends until human acts
+              const duration = Date.now() - toolCallStart;
+              await logger.logToolResult(toolName, toolCall.id, result, true, duration);
+              await supabase.from("tasks").update({
+                status: "needs_human_review",
+                intermediate_data: {
+                  ...(task.intermediate_data || {}),
+                  pending_approval: { tool: toolName, args: toolArgs }
+                }
+              }).eq("id", task_id);
+              console.log("[MAIN] Task suspended for blocking approval", { tool: toolName, task_id });
+              return new Response(
+                JSON.stringify({ success: true, needs_approval: true, tool: toolName }),
+                { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+              );
+            }
+            // ASYNC approval or self-serve: continue normally
+          } catch (error) {
+            toolResult = `Error in ${toolName}: ${error instanceof Error ? error.message : String(error)}`;
+          }
+
+          const duration = Date.now() - toolCallStart;
+          await logger.logToolResult(toolName, toolCall.id, toolResult, true, duration);
+          loopMessages.push({ role: "tool", content: toolResult, tool_call_id: toolCall.id });
           continue;
         }
 
@@ -696,13 +877,12 @@ Deno.serve(async (req) => {
 
         if (tool) {
           try {
-            // Handle handoff tool
-            if (tool.type === "handoff") {
+            // Handle spawn (sub-agent delegation) tool
+            if (tool.type === "spawn" || tool.type === "handoff") {
               const config = tool.config;
               const targetAgentId = config.target_agent_id;
-              const targetAgentSlug = config.target_agent_slug;
               
-              // Fetch target agent to get name
+              // Fetch target agent
               const { data: targetAgent } = await supabase
                 .from("agents")
                 .select("id, name, slug")
@@ -710,77 +890,132 @@ Deno.serve(async (req) => {
                 .single();
               
               if (!targetAgent) {
-                toolResult = `Handoff failed: Target agent not found (${targetAgentSlug})`;
+                toolResult = `Delegation failed: Target agent not found`;
               } else {
-                // Build context for new task
-                const existingContext = (task.context as TaskContext) || {};
-                const handoffChain = existingContext._handoff_chain || [];
-                handoffChain.push(agent.slug);
+                // Check spawn depth
+                let currentDepth = 0;
+                if (task.session_id) {
+                  const { data: currentSession } = await supabase
+                    .from("sessions")
+                    .select("spawn_depth")
+                    .eq("id", task.session_id)
+                    .single();
+                  currentDepth = currentSession?.spawn_depth || 0;
+                }
                 
-                const newContext: TaskContext = {
-                  ...existingContext,
-                  ...toolArgs,
-                  _handoff_from: agent.slug,
-                  _handoff_tool: tool.slug,
-                  _handoff_instructions: config.handoff_instructions,
-                  _handoff_chain: handoffChain,
-                };
-                
-                // Determine master_task_id
-                const masterTaskId = task.master_task_id || task.id;
-                
-                // Create new task for target agent
-                const { data: newTask, error: createError } = await supabase
-                  .from("tasks")
-                  .insert({
-                    master_task_id: masterTaskId,
-                    parent_id: task_id,
-                    agent_id: targetAgent.id,
-                    agent_slug: targetAgent.slug,
-                    status: "pending",
-                    input: { message: userMessage },
-                    context: newContext,
-                  })
-                  .select()
-                  .single();
-                
-                if (createError || !newTask) {
-                  toolResult = `Handoff failed: Could not create task - ${createError?.message}`;
+                if (currentDepth >= MAX_SPAWN_DEPTH) {
+                  toolResult = `Delegation failed: Maximum delegation depth (${MAX_SPAWN_DEPTH}) reached. Complete this task directly.`;
                 } else {
-                  console.log("[MAIN] Handoff task created", {
-                    new_task_id: newTask.id,
-                    target_agent: targetAgent.slug,
-                    context_keys: Object.keys(newContext),
-                  });
-                  
-                  // Log handoff message
-                  await logger.logHandoff(targetAgent.name, targetAgent.slug, newContext, {
-                    new_task_id: newTask.id,
-                    tool_call_id: toolCall.id,
-                  });
-                  
-                  // Explicitly mark current task as completed
-                  const { error: completeError } = await supabase
-                    .from("tasks")
-                    .update({
-                      status: "completed",
-                      output: {
-                        handoff: true,
-                        target_agent: targetAgent.slug,
-                        new_task_id: newTask.id,
-                        context: newContext,
-                      },
-                    })
-                    .eq("id", task_id);
-                  
-                  if (completeError) {
-                    console.error("[MAIN] Failed to complete task after handoff:", completeError);
+                  // Load skill instructions if configured
+                  let skillInstructions = config.instructions || config.handoff_instructions || "";
+                  if (config.skill_id) {
+                    const { data: skill } = await supabase
+                      .from("skills")
+                      .select("instructions")
+                      .eq("id", config.skill_id)
+                      .single();
+                    if (skill?.instructions) skillInstructions = skill.instructions;
                   }
                   
-                  handoffExecuted = true;
-                  toolResult = `Handed off to ${targetAgent.name}`;
+                  // Create child session
+                  const { data: childSession, error: sessionError } = await supabase
+                    .from("sessions")
+                    .insert({
+                      agent_id: targetAgent.id,
+                      channel_type: "spawn",
+                      parent_session_id: task.session_id,
+                      spawn_parent_task_id: task_id,
+                      spawn_depth: currentDepth + 1,
+                      status: "active",
+                      display_name: `Delegation: ${targetAgent.name}`,
+                    })
+                    .select()
+                    .single();
                   
-                  // Task will be picked up by queue trigger + cron job
+                  if (sessionError || !childSession) {
+                    toolResult = `Delegation failed: Could not create session - ${sessionError?.message}`;
+                  } else {
+                    // Build child task context
+                    const delegationMessage = toolArgs.message || userMessage;
+                    const childContext: Record<string, unknown> = {
+                      ...toolArgs,
+                      _delegated_from: agent.slug,
+                    };
+                    if (skillInstructions) {
+                      childContext._skill_instructions = skillInstructions;
+                    }
+                    
+                    // Create first task in child session
+                    const { data: childTask, error: taskError } = await supabase
+                      .from("tasks")
+                      .insert({
+                        session_id: childSession.id,
+                        parent_id: task_id,
+                        agent_id: targetAgent.id,
+                        agent_slug: targetAgent.slug,
+                        status: "pending",
+                        input: { message: delegationMessage },
+                        context: childContext,
+                      })
+                      .select()
+                      .single();
+                    
+                    if (taskError || !childTask) {
+                      toolResult = `Delegation failed: Could not create task - ${taskError?.message}`;
+                    } else {
+                      console.log("[MAIN] Delegation started", {
+                        child_session_id: childSession.id,
+                        child_task_id: childTask.id,
+                        target_agent: targetAgent.slug,
+                        spawn_depth: currentDepth + 1,
+                      });
+                      
+                      // Log delegation start
+                      await logger.logDelegationStart(
+                        targetAgent.name,
+                        targetAgent.slug,
+                        childSession.id,
+                        childTask.id,
+                        { tool_call_id: toolCall.id, skill_id: config.skill_id },
+                      );
+                      
+                      // Set current task to pending_subtask
+                      await supabase
+                        .from("tasks")
+                        .update({
+                          status: "pending_subtask",
+                          intermediate_data: {
+                            delegation: {
+                              child_session_id: childSession.id,
+                              child_task_id: childTask.id,
+                              target_agent_slug: targetAgent.slug,
+                              delegated_at: new Date().toISOString(),
+                            },
+                          },
+                        })
+                        .eq("id", task_id);
+                      
+                      // Invoke process-task for child (fire-and-forget)
+                      try {
+                        await fetch(
+                          `${Deno.env.get("SUPABASE_URL")}/functions/v1/process-task`,
+                          {
+                            method: "POST",
+                            headers: {
+                              Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                              "Content-Type": "application/json",
+                            },
+                            body: JSON.stringify({ task_id: childTask.id }),
+                          },
+                        );
+                      } catch (invokeErr) {
+                        console.error("[MAIN] Failed to invoke child task:", invokeErr);
+                      }
+                      
+                      delegationExecuted = true;
+                      toolResult = `Delegating to ${targetAgent.name}`;
+                    }
+                  }
                 }
               }
             } else if (tool.type === "mcp_server" && mcpFunctionName) {
@@ -829,36 +1064,24 @@ Deno.serve(async (req) => {
         const success = !toolResult.toLowerCase().includes("error") && !toolResult.includes("not found");
         
         await logger.logToolResult(toolName, toolCall.id, toolResult, success, duration);
-        toolResults.push(toolResult);
+        loopMessages.push({ role: "tool", content: toolResult, tool_call_id: toolCall.id });
         
-        // If handoff was executed, stop processing other tools and return
-        if (handoffExecuted) {
-          console.log("[MAIN] Handoff completed, task ending", { task_id });
+        // If delegation was executed, stop processing — parent suspends until child completes
+        if (delegationExecuted) {
+          console.log("[MAIN] Delegation started, parent task suspended", { task_id });
           return new Response(
-            JSON.stringify({ success: true, handoff: true, response: toolResult }),
+            JSON.stringify({ success: true, delegation: true }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } },
           );
         }
       }
 
-      // Synthesize response from tool results
-      await logger.logThinking("Synthesizing response from tool results...", {
-        step: "llm_synthesis_start",
-      });
+      // Continue loop — LLM will see tool results and decide next action
+      console.log("[MAIN] Tool loop iteration complete", { iteration, total_tool_calls: totalToolCallsCount });
+    }
 
-      try {
-        llmResponse = await synthesizeResponse(
-          provider,
-          apiKey,
-          model,
-          agent.system_prompt,
-          userMessage,
-          toolCalls,
-          toolResults,
-        );
-      } catch (error) {
-        llmResponse = `Tool executed. Synthesis error: ${error instanceof Error ? error.message : String(error)}`;
-      }
+    if (iteration >= MAX_TOOL_ITERATIONS) {
+      console.warn("[MAIN] Tool loop hit max iterations", { MAX_TOOL_ITERATIONS, total_tool_calls: totalToolCallsCount });
     }
 
     // Log final response
@@ -868,21 +1091,32 @@ Deno.serve(async (req) => {
       total_duration_ms: totalDuration,
     });
 
-    // Update task
+    // Update task — set status=completed HERE to avoid race with logComplete
     await supabase
       .from("tasks")
       .update({
+        status: "completed",
         output: { response: llmResponse },
         intermediate_data: {
           execution_log: {
             total_duration_ms: totalDuration,
             started_at: new Date(taskStartTime).toISOString(),
             completed_at: new Date().toISOString(),
-            tool_calls_count: toolCalls.length,
+            tool_calls_count: totalToolCallsCount,
+            tool_loop_iterations: iteration,
           },
         },
       })
       .eq("id", task_id);
+
+    // Update session last activity (fire-and-forget)
+    if (task.session_id) {
+      supabase
+        .from("sessions")
+        .update({ last_activity_at: new Date().toISOString() })
+        .eq("id", task.session_id)
+        .then(() => {});
+    }
 
     await logger.logComplete(llmResponse, { total_duration_ms: totalDuration });
 
@@ -910,7 +1144,7 @@ Deno.serve(async (req) => {
         // Check task details
         const { data: failedTask } = await supabase
           .from("tasks")
-          .select("is_parallel_task, agent_slug, master_task_id, parent_id")
+          .select("is_parallel_task, agent_slug, session_id, parent_id")
           .eq("id", task_id)
           .single();
         
@@ -928,7 +1162,7 @@ Deno.serve(async (req) => {
             aggregatorTask?.id,
             {
               agent_slug: failedTask.agent_slug,
-              master_task_id: failedTask.master_task_id,
+              session_id: failedTask.session_id,
               parent_task_id: failedTask.parent_id,
             }
           );
@@ -952,7 +1186,7 @@ Deno.serve(async (req) => {
             context: {
               task_id,
               agent_slug: failedTask?.agent_slug,
-              master_task_id: failedTask?.master_task_id,
+              session_id: failedTask?.session_id,
               parent_task_id: failedTask?.parent_id,
             },
           });

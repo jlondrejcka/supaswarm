@@ -29,7 +29,7 @@
     "url": "https://github.com/jlondrejcka/supaswarm/issues"
   },
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev -p 3000 --turbo",
     "build": "next build",
     "start": "next start -p 3000",
     "check": "tsc",

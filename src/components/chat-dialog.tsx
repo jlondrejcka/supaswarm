@@ -40,6 +40,8 @@ const messageTypeIcons: Record<MessageType, typeof Brain> = {
   error: AlertCircle,
   status_change: RefreshCw,
   handoff: ArrowRightLeft,
+  delegation_start: ArrowRightLeft,
+  delegation_complete: ArrowRightLeft,
 }
 
 const messageTypeColors: Record<MessageType, string> = {
@@ -53,6 +55,8 @@ const messageTypeColors: Record<MessageType, string> = {
   error: "text-red-500",
   status_change: "text-muted-foreground",
   handoff: "text-teal-500",
+  delegation_start: "text-indigo-500",
+  delegation_complete: "text-indigo-400",
 }
 
 const messageTypeLabels: Record<MessageType, string> = {
@@ -66,6 +70,8 @@ const messageTypeLabels: Record<MessageType, string> = {
   error: "Error",
   status_change: "Status",
   handoff: "Handoff",
+  delegation_start: "Delegating",
+  delegation_complete: "Result",
 }
 
 interface ChatDialogProps {
@@ -79,15 +85,15 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
   const [sending, setSending] = useState(false)
   const [defaultAgent, setDefaultAgent] = useState<Agent | null>(null)
   const [showHistory, setShowHistory] = useState(false)
-  const [chatHistory, setChatHistory] = useState<Task[]>([])
+  const [chatHistory, setChatHistory] = useState<any[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
   
   const [conversationContext, setConversationContext] = useState<{
-    masterTaskId: string | null
+    sessionId: string | null
     lastTaskId: string | null
-  }>({ masterTaskId: null, lastTaskId: null })
+  }>({ sessionId: null, lastTaskId: null })
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections(prev => {
@@ -164,19 +170,42 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
         async (payload) => {
           const newTask = payload.new as Task
           // Check if this task belongs to our current conversation (handoff scenario)
-          if (newTask.master_task_id && newTask.master_task_id === conversationContext.masterTaskId) {
-            // This is a handoff task - add it to the UI
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `pending-${newTask.id}`,
-                role: "assistant",
-                content: "Processing...",
-                status: newTask.status,
-                taskId: newTask.id,
-                taskMessages: [],
-              },
-            ])
+          if (newTask.session_id && newTask.session_id === conversationContext.sessionId) {
+            // Handoff: replace the last pending/running assistant message
+            // instead of adding a duplicate "Processing..." entry
+            setMessages((prev) => {
+              // If this task was already added by handleSubmit, skip
+              if (prev.some((m) => m.taskId === newTask.id)) return prev
+
+              // Find the last assistant message that is still processing
+              const lastPendingIdx = [...prev].reverse().findIndex(
+                (m) => m.role === "assistant" && m.status && !["completed", "failed"].includes(m.status)
+              )
+              if (lastPendingIdx !== -1) {
+                const actualIdx = prev.length - 1 - lastPendingIdx
+                const updated = [...prev]
+                // Swap taskId to the handoff task but keep accumulated chain-of-thought
+                updated[actualIdx] = {
+                  ...updated[actualIdx],
+                  taskId: newTask.id,
+                  content: "Processing...",
+                  status: newTask.status,
+                }
+                return updated
+              }
+              // No pending message found — this is a new turn, add it
+              return [
+                ...prev,
+                {
+                  id: `pending-${newTask.id}`,
+                  role: "assistant",
+                  content: "Processing...",
+                  status: newTask.status,
+                  taskId: newTask.id,
+                  taskMessages: [],
+                },
+              ]
+            })
             // Update lastTaskId to track the new task
             setConversationContext((prev) => ({
               ...prev,
@@ -213,7 +242,7 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
     return () => {
       client.removeChannel(channel)
     }
-  }, [open, conversationContext.masterTaskId])
+  }, [open, conversationContext.sessionId])
 
   async function fetchTaskMessages(taskId: string): Promise<TaskMessage[]> {
     if (!supabase) return []
@@ -250,9 +279,9 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
     setLoadingHistory(true)
     try {
       const { data, error } = await supabase
-        .from("tasks")
+        .from("sessions")
         .select("*")
-        .is("master_task_id", null)
+        .eq("channel_type", "webchat")
         .order("created_at", { ascending: false })
         .limit(50)
 
@@ -272,19 +301,17 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
 
   function handleNewChat() {
     setMessages([])
-    setConversationContext({ masterTaskId: null, lastTaskId: null })
+    setConversationContext({ sessionId: null, lastTaskId: null })
     setShowHistory(false)
   }
 
-  async function handleSelectChat(task: Task) {
+  async function handleSelectChat(session: any) {
     if (!supabase) return
-    
-    const masterTaskId = task.master_task_id || task.id
     
     const { data: conversationTasks, error } = await supabase
       .from("tasks")
       .select("*")
-      .or(`id.eq.${masterTaskId},master_task_id.eq.${masterTaskId}`)
+      .eq("session_id", session.id)
       .order("created_at", { ascending: true })
     
     if (error) {
@@ -292,7 +319,7 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
       return
     }
     
-    const allTasks = conversationTasks || [task]
+    const allTasks = conversationTasks || []
     const newMessages: Message[] = []
     let lastTaskId: string | null = null
     
@@ -333,7 +360,7 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
     }
     
     setConversationContext({
-      masterTaskId: masterTaskId,
+      sessionId: session.id,
       lastTaskId: lastTaskId,
     })
     setMessages(newMessages)
@@ -355,18 +382,35 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
     ])
 
     try {
-      const isFollowUp = conversationContext.masterTaskId !== null
+      let sessionId = conversationContext.sessionId
+      
+      // Create session if new conversation
+      if (!sessionId) {
+        const { data: session, error: sessionError } = await supabase
+          .from("sessions")
+          .insert({
+            agent_id: defaultAgent?.id || null,
+            channel_type: "webchat",
+            display_name: `Webchat: ${new Date().toLocaleString()}`,
+            status: "active",
+          })
+          .select()
+          .single()
+        
+        if (sessionError) throw sessionError
+        sessionId = session.id
+      }
       
       const taskData: Record<string, unknown> = {
         agent_id: defaultAgent?.id || null,
         agent_slug: defaultAgent?.slug || null,
         status: "pending",
         input: { message: userMessage },
+        session_id: sessionId,
       }
       
-      if (isFollowUp) {
+      if (conversationContext.lastTaskId) {
         taskData.parent_id = conversationContext.lastTaskId
-        taskData.master_task_id = conversationContext.masterTaskId
       }
       
       const { data: task, error } = await supabase
@@ -377,17 +421,10 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
 
       if (error) throw error
 
-      if (!isFollowUp) {
-        setConversationContext({
-          masterTaskId: task.id,
-          lastTaskId: task.id,
-        })
-      } else {
-        setConversationContext((prev) => ({
-          ...prev,
-          lastTaskId: task.id,
-        }))
-      }
+      setConversationContext({
+        sessionId: sessionId,
+        lastTaskId: task.id,
+      })
 
       setMessages((prev) => [
         ...prev,
@@ -495,7 +532,7 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
                       {defaultAgent.name}
                     </Badge>
                   )}
-                  {conversationContext.masterTaskId && (
+                  {conversationContext.sessionId && (
                     <Button 
                       variant="ghost" 
                       size="icon"
@@ -538,23 +575,22 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
               </div>
             ) : (
               <div className="space-y-2">
-                {chatHistory.map((task) => {
-                  const taskInput = task.input as { message?: string }
+                {chatHistory.map((session) => {
                   return (
                     <div
-                      key={task.id}
+                      key={session.id}
                       className="p-3 rounded-md bg-muted/50 hover:bg-muted cursor-pointer transition-colors"
-                      onClick={() => handleSelectChat(task)}
-                      data-testid={`history-item-${task.id}`}
+                      onClick={() => handleSelectChat(session)}
+                      data-testid={`history-item-${session.id}`}
                     >
                       <div className="flex items-center justify-between gap-2 mb-1">
-                        <StatusBadge status={task.status as TaskStatus} />
+                        <Badge variant="outline">{session.channel_type}</Badge>
                         <span className="text-xs text-muted-foreground">
-                          {task.created_at && formatDistanceToNow(new Date(task.created_at), { addSuffix: true })}
+                          {session.created_at && formatDistanceToNow(new Date(session.created_at), { addSuffix: true })}
                         </span>
                       </div>
                       <p className="text-sm line-clamp-2">
-                        {taskInput?.message || "No message"}
+                        {session.display_name || "Untitled session"}
                       </p>
                     </div>
                   )
@@ -575,33 +611,36 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
                 <div className="space-y-4">
                   {messages.map((msg) => (
                     <div key={msg.id}>
-                      <div
-                        className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                      >
-                        <div
-                          className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                            msg.role === "user"
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted"
-                          }`}
-                        >
-                          <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                          {msg.status && msg.status !== "completed" && (
-                            <div className="flex items-center gap-1 mt-1 text-xs opacity-70">
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              {msg.status}
-                            </div>
-                          )}
+                      {msg.role === "user" ? (
+                        <div className="flex justify-end">
+                          <div className="max-w-[80%] rounded-lg px-3 py-2 bg-primary text-primary-foreground">
+                            <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                          </div>
                         </div>
-                      </div>
-                      
-                      {msg.role === "assistant" && msg.taskMessages && msg.taskMessages.length > 0 && (
-                        <CollapsibleChainOfThought 
-                          taskMessages={msg.taskMessages}
-                          messageId={msg.id}
-                          expandedSections={expandedSections}
-                          toggleSection={toggleSection}
-                        />
+                      ) : (
+                        <div className="flex justify-start">
+                          <div className="max-w-[85%] space-y-1">
+                            {/* Chain of thought summary — above the response */}
+                            {msg.taskMessages && msg.taskMessages.length > 0 && (
+                              <ChainOfThoughtSummary
+                                taskMessages={msg.taskMessages}
+                                messageId={msg.id}
+                                expandedSections={expandedSections}
+                                toggleSection={toggleSection}
+                              />
+                            )}
+                            {/* Agent response bubble */}
+                            <div className="rounded-lg px-3 py-2 bg-muted">
+                              <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                              {msg.status && msg.status !== "completed" && (
+                                <div className="flex items-center gap-1 mt-1 text-xs opacity-70">
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  {msg.status}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       )}
                     </div>
                   ))}
@@ -630,92 +669,153 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
   )
 }
 
-interface CollapsibleChainOfThoughtProps {
+interface ChainOfThoughtSummaryProps {
   taskMessages: TaskMessage[]
   messageId: string
   expandedSections: Set<string>
   toggleSection: (sectionId: string) => void
 }
 
-function CollapsibleChainOfThought({ 
-  taskMessages, 
-  messageId, 
-  expandedSections, 
-  toggleSection 
-}: CollapsibleChainOfThoughtProps) {
+function ChainOfThoughtSummary({
+  taskMessages,
+  messageId,
+  expandedSections,
+  toggleSection,
+}: ChainOfThoughtSummaryProps) {
   const groupedMessages = groupTaskMessagesByType(taskMessages)
-  
-  if (groupedMessages.length === 0) return null
+  // Filter out user/assistant messages — those are shown as bubbles
+  const actionGroups = groupedMessages.filter(
+    (g) => g.type !== "user_message" && g.type !== "assistant_message"
+  )
+  if (actionGroups.length === 0) return null
+
+  const summaryId = `${messageId}-cot-summary`
+  const isExpanded = expandedSections.has(summaryId)
+
+  // Build ordered icon sequence (deduplicated consecutive types)
+  const iconSequence: { type: MessageType; count: number }[] = []
+  for (const group of actionGroups) {
+    iconSequence.push({ type: group.type, count: group.messages.length })
+  }
 
   return (
-    <div className="mt-2 ml-4 space-y-1">
-      {groupedMessages.map((group, groupIndex) => {
-        const sectionId = `${messageId}-${group.type}-${groupIndex}`
-        const isExpanded = expandedSections.has(sectionId)
-        const Icon = messageTypeIcons[group.type]
-        const colorClass = messageTypeColors[group.type]
-        const label = messageTypeLabels[group.type]
-        
-        if (group.type === 'user_message' || group.type === 'assistant_message') {
-          return null
-        }
-        
-        // Handoff messages get special prominent display
-        if (group.type === 'handoff') {
-          return (
-            <div key={sectionId} className="flex items-center gap-2 px-3 py-2 rounded-md bg-teal-500/10 border border-teal-500/20">
-              <ArrowRightLeft className="h-4 w-4 text-teal-500" />
-              {group.messages.map((msg, i) => {
-                const content = msg.content as { text?: string }
-                return (
-                  <span key={i} className="text-sm text-teal-600 dark:text-teal-400 font-medium">
-                    {content.text}
-                  </span>
-                )
-              })}
-            </div>
-          )
-        }
+    <div className="mb-1">
+      {/* Compact icon summary bar */}
+      <button
+        onClick={() => toggleSection(summaryId)}
+        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs bg-muted/60 hover:bg-muted transition-colors w-full"
+        data-testid={`cot-summary-${messageId}`}
+      >
+        {isExpanded ? (
+          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+        )}
+        <div className="flex items-center gap-1">
+          {iconSequence.map((item, i) => {
+            const Icon = messageTypeIcons[item.type]
+            const colorClass = messageTypeColors[item.type]
+            return (
+              <span key={i} className="flex items-center" title={`${messageTypeLabels[item.type]} (${item.count})`}>
+                <Icon className={`h-3 w-3 ${colorClass}`} />
+                {item.count > 1 && (
+                  <span className={`text-[9px] ml-0.5 ${colorClass} opacity-80`}>{item.count}</span>
+                )}
+                {i < iconSequence.length - 1 && (
+                  <span className="text-muted-foreground/40 mx-0.5">›</span>
+                )}
+              </span>
+            )
+          })}
+        </div>
+        <span className="ml-auto text-[10px] text-muted-foreground">
+          {taskMessages.length} steps
+        </span>
+      </button>
 
-        return (
-          <div key={sectionId}>
-            <button
-              onClick={() => toggleSection(sectionId)}
-              className="flex items-center gap-2 text-xs px-2 py-1 rounded hover-elevate transition-colors w-full text-left"
-              data-testid={`toggle-${group.type}-${groupIndex}`}
-            >
-              {isExpanded ? (
-                <ChevronDown className="h-3 w-3 shrink-0" />
-              ) : (
-                <ChevronRight className="h-3 w-3 shrink-0" />
-              )}
-              <Icon className={`h-3 w-3 shrink-0 ${colorClass}`} />
-              <span className={colorClass}>{label}</span>
-              <Badge variant="secondary" className="text-[10px] ml-auto">
-                {group.messages.length}
-              </Badge>
-            </button>
-            
-            {isExpanded && (
-              <div className="ml-5 mt-1 space-y-1">
-                {group.messages.map((msg, i) => {
-                  const content = msg.content as { text?: string; skill_name?: string; status?: string; error?: string; message?: string }
-                  const displayText = content.text || content.skill_name || content.status || content.error || content.message || JSON.stringify(content)
-                  
-                  return (
-                    <div 
-                      key={i}
-                      className="text-xs px-2 py-1 rounded bg-muted/50 text-muted-foreground"
-                    >
-                      {displayText}
-                    </div>
-                  )
-                })}
+      {/* Expanded detail panel */}
+      {isExpanded && (
+        <div className="mt-1 ml-1 space-y-1 border-l-2 border-muted pl-2">
+          {actionGroups.map((group, groupIndex) => {
+            const detailId = `${messageId}-detail-${group.type}-${groupIndex}`
+            const isDetailExpanded = expandedSections.has(detailId)
+            const Icon = messageTypeIcons[group.type]
+            const colorClass = messageTypeColors[group.type]
+            const label = messageTypeLabels[group.type]
+
+            // Handoff: always prominent
+            if (group.type === "handoff") {
+              return (
+                <div
+                  key={detailId}
+                  className="flex items-center gap-2 px-2 py-1 rounded-md bg-teal-500/10 border border-teal-500/20"
+                >
+                  <ArrowRightLeft className="h-3 w-3 text-teal-500" />
+                  {group.messages.map((msg, i) => {
+                    const content = msg.content as { text?: string }
+                    return (
+                      <span key={i} className="text-xs text-teal-600 dark:text-teal-400 font-medium">
+                        {content.text}
+                      </span>
+                    )
+                  })}
+                </div>
+              )
+            }
+
+            return (
+              <div key={detailId}>
+                <button
+                  onClick={() => toggleSection(detailId)}
+                  className="flex items-center gap-1.5 text-xs px-1.5 py-0.5 rounded hover:bg-muted/80 transition-colors w-full text-left"
+                  data-testid={`toggle-${group.type}-${groupIndex}`}
+                >
+                  {isDetailExpanded ? (
+                    <ChevronDown className="h-2.5 w-2.5 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-2.5 w-2.5 shrink-0" />
+                  )}
+                  <Icon className={`h-3 w-3 shrink-0 ${colorClass}`} />
+                  <span className={`${colorClass} font-medium`}>{label}</span>
+                  <Badge variant="secondary" className="text-[9px] h-4 ml-auto">
+                    {group.messages.length}
+                  </Badge>
+                </button>
+
+                {isDetailExpanded && (
+                  <div className="ml-4 mt-0.5 space-y-0.5">
+                    {group.messages.map((msg, i) => {
+                      const content = msg.content as {
+                        text?: string
+                        skill_name?: string
+                        status?: string
+                        error?: string
+                        message?: string
+                      }
+                      const displayText =
+                        content.text ||
+                        content.skill_name ||
+                        content.status ||
+                        content.error ||
+                        content.message ||
+                        JSON.stringify(content)
+
+                      return (
+                        <div
+                          key={i}
+                          className="text-[11px] px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground leading-relaxed"
+                        >
+                          {displayText}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        )
-      })}
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

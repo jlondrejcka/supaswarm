@@ -20,7 +20,7 @@ export interface ErrorContext {
   mcp_server?: string;
   aggregator_task_id?: string;
   is_parallel_task?: boolean;
-  master_task_id?: string;
+  session_id?: string;
   parent_task_id?: string;
   additional_context?: Record<string, unknown>;
 }
@@ -123,7 +123,7 @@ export function createErrorHandler(supabase: SupabaseClient, task_id: string) {
                 mcp_server: context.mcp_server,
                 is_parallel_task: context.is_parallel_task || false,
                 aggregator_task_id: context.aggregator_task_id,
-                master_task_id: context.master_task_id,
+                session_id: context.session_id,
                 parent_task_id: context.parent_task_id,
                 ...context.additional_context,
               },

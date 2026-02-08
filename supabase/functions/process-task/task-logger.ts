@@ -9,7 +9,9 @@ export type MessageType =
   | "thinking"
   | "status_change"
   | "error"
-  | "handoff";
+  | "handoff"
+  | "delegation_start"
+  | "delegation_complete";
 
 /**
  * Create a task logger instance
@@ -226,7 +228,7 @@ export function createTaskLogger(
   }
 
   /**
-   * Log agent handoff
+   * Log agent handoff (legacy — kept for backward compat)
    */
   async function logHandoff(
     targetAgentName: string,
@@ -251,6 +253,50 @@ export function createTaskLogger(
     );
   }
 
+  /**
+   * Log delegation start (spawn sub-agent)
+   */
+  async function logDelegationStart(
+    targetAgentName: string,
+    targetAgentSlug: string,
+    childSessionId: string,
+    childTaskId: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    await log(
+      "delegation_start",
+      `Delegating to ${targetAgentName}`,
+      {
+        ...metadata,
+        target_agent_name: targetAgentName,
+        target_agent_slug: targetAgentSlug,
+        child_session_id: childSessionId,
+        child_task_id: childTaskId,
+        step: "delegation_start",
+      },
+    );
+  }
+
+  /**
+   * Log delegation complete (spawn result received)
+   */
+  async function logDelegationComplete(
+    fromAgentSlug: string,
+    result: Record<string, unknown>,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    await log(
+      "delegation_complete",
+      `Received result from ${fromAgentSlug}`,
+      {
+        ...metadata,
+        from_agent_slug: fromAgentSlug,
+        spawn_result: result,
+        step: "delegation_complete",
+      },
+    );
+  }
+
   return {
     log,
     logUserMessage,
@@ -263,6 +309,8 @@ export function createTaskLogger(
     logError,
     logComplete,
     logHandoff,
+    logDelegationStart,
+    logDelegationComplete,
   };
 }
 

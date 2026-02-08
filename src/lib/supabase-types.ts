@@ -75,45 +75,60 @@ export type Database = {
       agents: {
         Row: {
           created_at: string | null
+          daily_token_budget: number | null
           description: string | null
           id: string
           is_active: boolean | null
           is_default: boolean | null
+          last_heartbeat: string | null
           max_tokens: number | null
+          memory_mode: string | null
           model: string | null
           name: string
           provider_id: string | null
+          role: string | null
           slug: string
+          status: string | null
           system_prompt: string
           temperature: number | null
           updated_at: string | null
         }
         Insert: {
           created_at?: string | null
+          daily_token_budget?: number | null
           description?: string | null
           id?: string
           is_active?: boolean | null
           is_default?: boolean | null
+          last_heartbeat?: string | null
           max_tokens?: number | null
+          memory_mode?: string | null
           model?: string | null
           name: string
           provider_id?: string | null
+          role?: string | null
           slug: string
+          status?: string | null
           system_prompt: string
           temperature?: number | null
           updated_at?: string | null
         }
         Update: {
           created_at?: string | null
+          daily_token_budget?: number | null
           description?: string | null
           id?: string
           is_active?: boolean | null
           is_default?: boolean | null
+          last_heartbeat?: string | null
           max_tokens?: number | null
+          memory_mode?: string | null
           model?: string | null
           name?: string
           provider_id?: string | null
+          role?: string | null
           slug?: string
+          status?: string | null
           system_prompt?: string
           temperature?: number | null
           updated_at?: string | null
@@ -124,6 +139,76 @@ export type Database = {
             columns: ["provider_id"]
             isOneToOne: false
             referencedRelation: "llm_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      approval_requests: {
+        Row: {
+          id: string
+          agent_id: string | null
+          task_id: string | null
+          session_id: string | null
+          action_type: string
+          resource_table: string
+          resource_id: string
+          payload: Json
+          status: string
+          reviewed_by: string | null
+          reviewed_at: string | null
+          review_notes: string | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          agent_id?: string | null
+          task_id?: string | null
+          session_id?: string | null
+          action_type: string
+          resource_table: string
+          resource_id: string
+          payload?: Json
+          status?: string
+          reviewed_by?: string | null
+          reviewed_at?: string | null
+          review_notes?: string | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          agent_id?: string | null
+          task_id?: string | null
+          session_id?: string | null
+          action_type?: string
+          resource_table?: string
+          resource_id?: string
+          payload?: Json
+          status?: string
+          reviewed_by?: string | null
+          reviewed_at?: string | null
+          review_notes?: string | null
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "approval_requests_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "approval_requests_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "approval_requests_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
             referencedColumns: ["id"]
           },
         ]
@@ -318,9 +403,11 @@ export type Database = {
           intermediate_data: Json | null
           is_parallel_task: boolean
           logs: string[] | null
-          master_task_id: string | null
+          mission_status: string | null
           output: Json | null
           parent_id: string | null
+          priority: string | null
+          session_id: string | null
           status: string
           storage_paths: string[] | null
           updated_at: string | null
@@ -336,9 +423,11 @@ export type Database = {
           intermediate_data?: Json | null
           is_parallel_task?: boolean
           logs?: string[] | null
-          master_task_id?: string | null
+          mission_status?: string | null
           output?: Json | null
           parent_id?: string | null
+          priority?: string | null
+          session_id?: string | null
           status?: string
           storage_paths?: string[] | null
           updated_at?: string | null
@@ -354,9 +443,11 @@ export type Database = {
           intermediate_data?: Json | null
           is_parallel_task?: boolean
           logs?: string[] | null
-          master_task_id?: string | null
+          mission_status?: string | null
           output?: Json | null
           parent_id?: string | null
+          priority?: string | null
+          session_id?: string | null
           status?: string
           storage_paths?: string[] | null
           updated_at?: string | null
@@ -370,13 +461,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "tasks_master_task_id_fkey"
-            columns: ["master_task_id"]
-            isOneToOne: false
-            referencedRelation: "tasks"
-            referencedColumns: ["id"]
-          },
-          {
             foreignKeyName: "tasks_parent_id_fkey"
             columns: ["parent_id"]
             isOneToOne: false
@@ -385,44 +469,145 @@ export type Database = {
           },
         ]
       }
+      sessions: {
+        Row: {
+          id: string
+          agent_id: string | null
+          channel_type: string | null
+          channel_id: string | null
+          thread_id: string | null
+          sender_id: string | null
+          display_name: string | null
+          status: string | null
+          origin: Json
+          delivery_context: Json
+          default_model_provider: string | null
+          default_model: string | null
+          tokens_input: number
+          tokens_output: number
+          idle_timeout_min: number
+          spawn_depth: number
+          last_activity_at: string | null
+          created_at: string | null
+          parent_session_id: string | null
+          spawn_parent_task_id: string | null
+          max_tokens: number | null
+        }
+        Insert: {
+          id?: string
+          agent_id?: string | null
+          channel_type?: string | null
+          channel_id?: string | null
+          thread_id?: string | null
+          sender_id?: string | null
+          display_name?: string | null
+          status?: string | null
+          origin?: Json
+          delivery_context?: Json
+          default_model_provider?: string | null
+          default_model?: string | null
+          tokens_input?: number
+          tokens_output?: number
+          idle_timeout_min?: number
+          spawn_depth?: number
+          last_activity_at?: string | null
+          created_at?: string | null
+          parent_session_id?: string | null
+          spawn_parent_task_id?: string | null
+          max_tokens?: number | null
+        }
+        Update: {
+          id?: string
+          agent_id?: string | null
+          channel_type?: string | null
+          channel_id?: string | null
+          thread_id?: string | null
+          sender_id?: string | null
+          display_name?: string | null
+          status?: string | null
+          origin?: Json
+          delivery_context?: Json
+          default_model_provider?: string | null
+          default_model?: string | null
+          tokens_input?: number
+          tokens_output?: number
+          idle_timeout_min?: number
+          spawn_depth?: number
+          last_activity_at?: string | null
+          created_at?: string | null
+          parent_session_id?: string | null
+          spawn_parent_task_id?: string | null
+          max_tokens?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sessions_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tools: {
         Row: {
           config: Json
           created_at: string | null
+          created_by: string | null
           credential_description: string | null
           credential_secret_name: string | null
           credential_type: string | null
           description: string | null
+          execution_mode: string | null
+          function_slug: string | null
+          function_url: string | null
           id: string
           is_active: boolean | null
           name: string
+          rate_limit_per_min: number | null
+          requires_approval: boolean | null
           slug: string
+          timeout_ms: number | null
           type: string
         }
         Insert: {
           config?: Json
           created_at?: string | null
+          created_by?: string | null
           credential_description?: string | null
           credential_secret_name?: string | null
           credential_type?: string | null
           description?: string | null
+          execution_mode?: string | null
+          function_slug?: string | null
+          function_url?: string | null
           id?: string
           is_active?: boolean | null
           name: string
+          rate_limit_per_min?: number | null
+          requires_approval?: boolean | null
           slug: string
+          timeout_ms?: number | null
           type: string
         }
         Update: {
           config?: Json
           created_at?: string | null
+          created_by?: string | null
           credential_description?: string | null
           credential_secret_name?: string | null
           credential_type?: string | null
           description?: string | null
+          execution_mode?: string | null
+          function_slug?: string | null
+          function_url?: string | null
           id?: string
           is_active?: boolean | null
           name?: string
+          rate_limit_per_min?: number | null
+          requires_approval?: boolean | null
           slug?: string
+          timeout_ms?: number | null
           type?: string
         }
         Relationships: []
@@ -470,6 +655,10 @@ export type Database = {
           metadata: Json
           sequence_number: number
           created_at: string | null
+          channel_context: Json | null
+          model: string | null
+          provider: string | null
+          token_usage: Json | null
         }
         Insert: {
           id?: string
@@ -481,6 +670,10 @@ export type Database = {
           metadata?: Json
           sequence_number?: number
           created_at?: string | null
+          channel_context?: Json | null
+          model?: string | null
+          provider?: string | null
+          token_usage?: Json | null
         }
         Update: {
           id?: string
@@ -492,6 +685,10 @@ export type Database = {
           metadata?: Json
           sequence_number?: number
           created_at?: string | null
+          channel_context?: Json | null
+          model?: string | null
+          provider?: string | null
+          token_usage?: Json | null
         }
         Relationships: [
           {
@@ -555,12 +752,18 @@ export type Skill = Tables<'skills'>
 export type LLMProvider = Tables<'llm_providers'>
 export type ProviderModel = Tables<'provider_models'>
 export type HumanReview = Tables<'human_reviews'>
+export type ApprovalRequest = Tables<'approval_requests'>
 export type AgentTool = Tables<'agent_tools'>
 export type AgentSkill = Tables<'agent_skills'>
+export type Session = Tables<'sessions'>
 
 export type TaskStatus = 'pending' | 'queued' | 'running' | 'pending_subtask' | 'needs_human_review' | 'completed' | 'failed' | 'cancelled'
-export type ToolType = 'internal' | 'mcp_server' | 'http_api' | 'supabase_rpc' | 'handoff'
+export type ToolType = 'internal' | 'mcp_server' | 'http_api' | 'supabase_rpc' | 'spawn'
 export type CredentialType = 'api_key' | 'bearer_token' | 'oauth_refresh_token' | 'none'
+
+export type AgentRole = 'system' | 'lead' | 'worker'
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected'
+export type ApprovalActionType = 'create_tool' | 'update_tool' | 'create_cron' | 'update_cron' | 'delete_cron' | 'create_agent' | 'update_agent' | 'deploy_function'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageType = 
@@ -574,28 +777,47 @@ export type MessageType =
   | 'error' 
   | 'status_change'
   | 'handoff'
+  | 'delegation_start'
+  | 'delegation_complete'
 
-// Handoff tool configuration
-export interface HandoffContextVariable {
+// Spawn (sub-agent delegation) tool configuration
+export interface SpawnContextVariable {
   name: string
   type: 'string' | 'number' | 'boolean' | 'object'
   required: boolean
   description: string
 }
 
-export interface HandoffToolConfig {
+// Keep HandoffContextVariable as alias for backward compat
+export type HandoffContextVariable = SpawnContextVariable
+
+export interface SpawnToolConfig {
   target_agent_id: string
   target_agent_slug: string
-  context_variables: HandoffContextVariable[]
-  handoff_instructions?: string
+  skill_id?: string
+  instructions?: string
+  context_variables: SpawnContextVariable[]
 }
 
-// Task context for handoffs
+// Legacy alias
+export type HandoffToolConfig = SpawnToolConfig
+
+// Task context for delegation
 export interface TaskContext {
+  _delegated_from?: string
+  _skill_instructions?: string
+  _spawn_result?: {
+    status: string
+    output: Record<string, unknown> | null
+    agent_slug: string
+    task_id: string
+    session_id: string
+  }
   _handoff_from?: string
   _handoff_tool?: string
   _handoff_instructions?: string
   _handoff_chain?: string[]
+  _approval_result?: string
   [key: string]: unknown
 }
 
