@@ -46,6 +46,30 @@ function getCreateAggregatorTaskToolDefinition(): LLMToolDefinition {
   };
 }
 
+function getAskSessionToolDefinition(): LLMToolDefinition {
+  return {
+    type: "function",
+    function: {
+      name: "ask_session",
+      description: "Send a follow-up message to an existing agent session. The target session retains its full conversation history. Use this to ask follow-up questions to a previously spawned agent without starting a new session. Your task will suspend until the agent responds.",
+      parameters: {
+        type: "object",
+        properties: {
+          session_id: {
+            type: "string",
+            description: "The session ID to send the message to (from a previous spawn/delegation result)",
+          },
+          message: {
+            type: "string",
+            description: "The follow-up message or question to send",
+          },
+        },
+        required: ["session_id", "message"],
+      },
+    },
+  };
+}
+
 function getCreateParallelTaskToolDefinition(): LLMToolDefinition {
   return {
     type: "function",
@@ -430,10 +454,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Add built-in parallel coordination tools
+    // Add built-in coordination tools
     toolDefinitions.push(getCreateParallelTaskToolDefinition());
     toolDefinitions.push(getCreateAggregatorTaskToolDefinition());
-    console.log("[MAIN] Added parallel coordination tools");
+    toolDefinitions.push(getAskSessionToolDefinition());
+    console.log("[MAIN] Added coordination tools (parallel + ask_session)");
 
     // Self-management tools (Rick only — agent.role === 'system')
     if (agent.role === 'system') {
@@ -827,6 +852,137 @@ Deno.serve(async (req) => {
           const duration = Date.now() - toolCallStart;
           await logger.logToolResult(toolName, toolCall.id, toolResult, !toolResult.includes("Error"), duration);
           loopMessages.push({ role: "tool", content: toolResult, tool_call_id: toolCall.id });
+          continue;
+        }
+
+        // Handle ask_session built-in tool (follow-up to existing session)
+        if (toolName === "ask_session") {
+          const targetSessionId = toolArgs.session_id as string;
+          const followUpMessage = toolArgs.message as string;
+
+          if (!targetSessionId || !followUpMessage) {
+            toolResult = "Error: session_id and message are required";
+          } else {
+            try {
+              // Fetch the target session
+              const { data: targetSession, error: sessionErr } = await supabase
+                .from("sessions")
+                .select("id, agent_id, status, spawn_depth")
+                .eq("id", targetSessionId)
+                .single();
+
+              if (sessionErr || !targetSession) {
+                toolResult = `Error: Session not found (${targetSessionId})`;
+              } else {
+                // Fetch the session's agent
+                const { data: targetAgent } = await supabase
+                  .from("agents")
+                  .select("id, name, slug")
+                  .eq("id", targetSession.agent_id)
+                  .single();
+
+                if (!targetAgent) {
+                  toolResult = `Error: Agent for session not found`;
+                } else {
+                  // Reopen session if closed/completed + point spawn_parent_task_id to current task
+                  await supabase
+                    .from("sessions")
+                    .update({
+                      status: "active",
+                      spawn_parent_task_id: task_id,
+                      parent_session_id: task.session_id,
+                      last_activity_at: new Date().toISOString(),
+                    })
+                    .eq("id", targetSessionId);
+
+                  // Create follow-up task in the child session
+                  const { data: childTask, error: taskErr } = await supabase
+                    .from("tasks")
+                    .insert({
+                      session_id: targetSessionId,
+                      parent_id: task_id,
+                      agent_id: targetAgent.id,
+                      agent_slug: targetAgent.slug,
+                      status: "pending",
+                      input: { message: followUpMessage },
+                      context: { _delegated_from: agent.slug },
+                    })
+                    .select()
+                    .single();
+
+                  if (taskErr || !childTask) {
+                    toolResult = `Error creating follow-up task: ${taskErr?.message}`;
+                  } else {
+                    console.log("[MAIN] ask_session: follow-up created", {
+                      child_session_id: targetSessionId,
+                      child_task_id: childTask.id,
+                      target_agent: targetAgent.slug,
+                    });
+
+                    // Log delegation start
+                    await logger.logDelegationStart(
+                      targetAgent.name,
+                      targetAgent.slug,
+                      targetSessionId,
+                      childTask.id,
+                      { tool_call_id: toolCall.id, follow_up: true },
+                    );
+
+                    // Suspend parent task
+                    await supabase
+                      .from("tasks")
+                      .update({
+                        status: "pending_subtask",
+                        intermediate_data: {
+                          delegation: {
+                            child_session_id: targetSessionId,
+                            child_task_id: childTask.id,
+                            target_agent_slug: targetAgent.slug,
+                            delegated_at: new Date().toISOString(),
+                            follow_up: true,
+                          },
+                        },
+                      })
+                      .eq("id", task_id);
+
+                    // Invoke process-task for child
+                    try {
+                      await fetch(
+                        `${Deno.env.get("SUPABASE_URL")}/functions/v1/process-task`,
+                        {
+                          method: "POST",
+                          headers: {
+                            Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                            "Content-Type": "application/json",
+                          },
+                          body: JSON.stringify({ task_id: childTask.id }),
+                        },
+                      );
+                    } catch (invokeErr) {
+                      console.error("[MAIN] ask_session: failed to invoke child task:", invokeErr);
+                    }
+
+                    delegationExecuted = true;
+                    toolResult = `Follow-up sent to ${targetAgent.name} in session ${targetSessionId}`;
+                  }
+                }
+              }
+            } catch (err) {
+              toolResult = `Error in ask_session: ${err instanceof Error ? err.message : String(err)}`;
+            }
+          }
+
+          const duration = Date.now() - toolCallStart;
+          await logger.logToolResult(toolName, toolCall.id, toolResult, !toolResult.includes("Error"), duration);
+          loopMessages.push({ role: "tool", content: toolResult, tool_call_id: toolCall.id });
+
+          if (delegationExecuted) {
+            console.log("[MAIN] ask_session: parent task suspended", { task_id });
+            return new Response(
+              JSON.stringify({ success: true, delegation: true, follow_up: true }),
+              { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            );
+          }
           continue;
         }
 
