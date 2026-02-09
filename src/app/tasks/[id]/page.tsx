@@ -10,8 +10,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
 import type { Task, TaskStatus } from "@/lib/supabase-types"
-import { ArrowLeft, Clock, Bot, MessageSquare, AlertCircle, CheckCircle2, RefreshCw, Terminal, ListTree, Users, ChevronRight, ShieldAlert, MessageCircle } from "lucide-react"
+import { ArrowLeft, Clock, Bot, MessageSquare, AlertCircle, CheckCircle2, RefreshCw, RotateCcw, Square, Terminal, ListTree, Users, ChevronRight, ShieldAlert, MessageCircle } from "lucide-react"
 import { TaskMessageThread } from "@/components/task-message-thread"
+import { useRouter } from "next/navigation"
 import { format, formatDistanceToNow } from "date-fns"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
@@ -21,6 +22,7 @@ import { Label } from "@/components/ui/label"
 
 export default function TaskDetailPage() {
   const params = useParams()
+  const router = useRouter()
   const taskId = params.id as string
   const [task, setTask] = useState<Task | null>(null)
   const [subtasks, setSubtasks] = useState<Task[]>([])
@@ -31,6 +33,8 @@ export default function TaskDetailPage() {
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [retrying, setRetrying] = useState(false)
+  const [rerunning, setRerunning] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [approving, setApproving] = useState(false)
   const [showComment, setShowComment] = useState(false)
   const [commentText, setCommentText] = useState("")
@@ -146,6 +150,64 @@ export default function TaskDetailPage() {
     }
   }
 
+  async function handleRerun() {
+    if (!supabase || !taskId) return
+    setRerunning(true)
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: result, error: rpcError } = await (supabase as any).rpc("rerun_task", {
+        p_task_id: taskId,
+      })
+
+      if (rpcError) {
+        console.error("Rerun RPC error:", rpcError)
+        return
+      }
+
+      const rerunResult = result as { success?: boolean; task_id?: string; error?: string } | null
+      if (!rerunResult?.success || !rerunResult.task_id) {
+        console.error("Rerun failed:", rerunResult?.error)
+        return
+      }
+
+      router.push(`/tasks/${rerunResult.task_id}`)
+    } catch (error) {
+      console.error("Failed to rerun task:", error)
+    } finally {
+      setRerunning(false)
+    }
+  }
+
+  async function handleCancel() {
+    if (!supabase || !taskId) return
+    setCancelling(true)
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: result, error: rpcError } = await (supabase as any).rpc("cancel_task", {
+        p_task_id: taskId,
+      })
+
+      if (rpcError) {
+        console.error("Cancel RPC error:", rpcError)
+        return
+      }
+
+      const cancelResult = result as { success?: boolean; error?: string } | null
+      if (!cancelResult?.success) {
+        console.error("Cancel failed:", cancelResult?.error)
+        return
+      }
+
+      await fetchTask()
+    } catch (error) {
+      console.error("Failed to cancel task:", error)
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   async function fetchApprovalRequest() {
     if (!supabase || !taskId) return
     try {
@@ -208,6 +270,10 @@ export default function TaskDetailPage() {
     ['failed', 'cancelled'].includes(task.status) ||
     (task.status === 'needs_human_review' && !approvalRequest)
   )
+  // Rerun: always available (creates a new task with same input)
+  const canRerun = !!task
+  // Cancel: only for active tasks
+  const canCancel = task?.status && ['pending', 'queued', 'running', 'pending_subtask'].includes(task.status)
   const showApproval = task?.status === 'needs_human_review' && approvalRequest
 
   // Extract full tool args from intermediate_data.pending_approval
@@ -279,6 +345,30 @@ export default function TaskDetailPage() {
           </div>
         </div>
         <div className="flex gap-2">
+          {canCancel && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleCancel}
+              disabled={cancelling}
+              data-testid="button-cancel"
+            >
+              <Square className="h-3.5 w-3.5 mr-2" />
+              {cancelling ? 'Stopping...' : 'Stop'}
+            </Button>
+          )}
+          {canRerun && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRerun}
+              disabled={rerunning}
+              data-testid="button-rerun"
+            >
+              <RotateCcw className={`h-4 w-4 mr-2 ${rerunning ? 'animate-spin' : ''}`} />
+              {rerunning ? 'Creating...' : 'Rerun'}
+            </Button>
+          )}
           {canRetry && (
             <Button 
               variant="default" 

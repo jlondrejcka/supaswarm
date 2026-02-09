@@ -27,10 +27,10 @@ CREATE TABLE IF NOT EXISTS public.sessions (
   spawn_parent_task_id UUID REFERENCES public.tasks(id)
 );
 
--- Partial unique: only one active/idle session per thread (excludes webchat — webchat allows multiple)
+-- Partial unique: only one active/idle TOP-LEVEL session per thread (excludes webchat + child sessions)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_active_thread
   ON public.sessions(channel_type, COALESCE(channel_id,''), COALESCE(thread_id,''))
-  WHERE status NOT IN ('closed', 'completed') AND channel_type != 'webchat';
+  WHERE status NOT IN ('closed', 'completed') AND channel_type != 'webchat' AND parent_session_id IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON public.sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_thread ON public.sessions(channel_type, thread_id);

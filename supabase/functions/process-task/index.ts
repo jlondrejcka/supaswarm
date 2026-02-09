@@ -527,6 +527,13 @@ Deno.serve(async (req) => {
     }
 
     // Inject spawn result if present (parent task resuming after delegation)
+    console.log("[MAIN] Context check", {
+      task_id,
+      has_context: !!taskContext,
+      context_keys: taskContext ? Object.keys(taskContext) : [],
+      has_spawn_result: !!taskContext?._spawn_result,
+      task_status_at_fetch: task.status,
+    });
     if (taskContext?._spawn_result) {
       const sr = taskContext._spawn_result as SpawnResult;
 
@@ -1247,23 +1254,49 @@ Deno.serve(async (req) => {
       total_duration_ms: totalDuration,
     });
 
-    // Update task — set status=completed HERE to avoid race with logComplete
-    await supabase
-      .from("tasks")
-      .update({
-        status: "completed",
-        output: { response: llmResponse },
-        intermediate_data: {
-          execution_log: {
-            total_duration_ms: totalDuration,
-            started_at: new Date(taskStartTime).toISOString(),
-            completed_at: new Date().toISOString(),
-            tool_calls_count: totalToolCallsCount,
-            tool_loop_iterations: iteration,
-          },
-        },
-      })
-      .eq("id", task_id);
+    // Update task — use RPC to bypass PostgREST PATCH which silently fails
+    // when AFTER UPDATE triggers (check_spawn_completion) do cascading work.
+    const completionOutput = { response: llmResponse };
+    const completionIntermediateData = {
+      execution_log: {
+        total_duration_ms: totalDuration,
+        started_at: new Date(taskStartTime).toISOString(),
+        completed_at: new Date().toISOString(),
+        tool_calls_count: totalToolCallsCount,
+        tool_loop_iterations: iteration,
+      },
+    };
+
+    let completionSuccess = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const { data: rpcResult, error: rpcError } = await supabase.rpc("complete_task", {
+          p_task_id: task_id,
+          p_output: completionOutput,
+          p_intermediate_data: completionIntermediateData,
+        });
+
+        if (rpcError) {
+          console.error(`[MAIN] complete_task RPC error (attempt ${attempt}):`, rpcError);
+        } else if (rpcResult && !rpcResult.success) {
+          console.error(`[MAIN] complete_task returned failure (attempt ${attempt}):`, rpcResult);
+        } else {
+          completionSuccess = true;
+          console.log("[MAIN] Task marked completed via RPC", { task_id, attempt });
+          break;
+        }
+      } catch (err) {
+        console.error(`[MAIN] complete_task exception (attempt ${attempt}):`, err);
+      }
+
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    }
+
+    if (!completionSuccess) {
+      console.error("[MAIN] CRITICAL: Failed to mark task completed after 3 attempts", { task_id });
+    }
 
     // Update session last activity (fire-and-forget)
     if (task.session_id) {

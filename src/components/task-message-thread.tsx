@@ -117,7 +117,7 @@ export function TaskMessageThread({ taskId, variant = "log" }: TaskMessageThread
           filter: `task_id=eq.${taskId}`,
         },
         (payload) => {
-          setMessages(prev => [...prev, payload.new as TaskMessage].sort((a, b) => a.sequence_number - b.sequence_number))
+          setMessages(prev => [...prev, payload.new as TaskMessage].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()))
         }
       )
       .subscribe()
@@ -139,7 +139,7 @@ export function TaskMessageThread({ taskId, variant = "log" }: TaskMessageThread
         .from("task_messages" as any)
         .select("*")
         .eq("task_id", taskId)
-        .order("sequence_number", { ascending: true })
+        .order("created_at", { ascending: true })
 
       if (error) throw error
       setMessages((data || []) as unknown as TaskMessage[])
