@@ -19,7 +19,6 @@ interface Stats {
   pendingReviews: number
   totalAgents: number
   activeAgents: number
-  activeSessions: number
   totalTools: number
   totalSkills: number
 }
@@ -78,8 +77,6 @@ export default function Dashboard() {
       setAgents(agentList)
       setSessions(sessionList)
 
-      const activeSessions = sessionList.filter((s) => s.status === "active").length
-
       setStats({
         totalTasks: taskList.length,
         runningTasks: taskList.filter(t => t.status === "running").length,
@@ -87,7 +84,6 @@ export default function Dashboard() {
         pendingReviews: taskList.filter(t => t.status === "needs_human_review").length,
         totalAgents: agentList.length,
         activeAgents: agentList.filter(a => a.is_active).length,
-        activeSessions,
         totalTools: toolList.length,
         totalSkills: skillList.length
       })
@@ -203,7 +199,7 @@ export default function Dashboard() {
         </Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
             <CardTitle className="text-sm font-medium">Total Tasks</CardTitle>
@@ -226,19 +222,6 @@ export default function Dashboard() {
             <div className="text-2xl font-bold" data-testid="text-active-agents">{stats?.activeAgents || 0}</div>
             <p className="text-xs text-muted-foreground">
               of {stats?.totalAgents || 0} total
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-            <CardTitle className="text-sm font-medium">Active Sessions</CardTitle>
-            <Zap className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.activeSessions || 0}</div>
-            <p className="text-xs text-muted-foreground">
-              LLM sessions
             </p>
           </CardContent>
         </Card>
