@@ -15,7 +15,8 @@ import {
   PanelLeft,
   Radio,
   MessageCircle,
-  Radar
+  Clock,
+  Network
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -27,10 +28,10 @@ import { ThemeToggle } from "@/components/theme-toggle"
 const navItems = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/chat", icon: MessageCircle, label: "Chat" },
-  { href: "/mission-control", icon: Radar, label: "Mission Control" },
   { href: "/tasks", icon: ListTodo, label: "Tasks" },
+  { href: "/jobs", icon: Clock, label: "Jobs" },
   { href: "/sessions", icon: Radio, label: "Sessions" },
-  { href: "/channels", icon: Radio, label: "Channels" },
+  { href: "/channels", icon: Network, label: "Channels" },
   { href: "/agents", icon: Bot, label: "Agents" },
   { href: "/skills", icon: Zap, label: "Skills" },
   { href: "/tools", icon: Wrench, label: "Tools" },

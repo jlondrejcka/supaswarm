@@ -1,12 +1,16 @@
 "use client"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Bot, ListTodo, Wrench, Zap, AlertCircle, CheckCircle, Clock, Activity, Trophy, Crown, Medal } from "lucide-react"
-import { useEffect, useState } from "react"
+import { Bot, ListTodo, Wrench, Zap, AlertCircle, CheckCircle, Clock, Activity, Trophy, Crown, Medal, Radio, RefreshCw } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { useEffect, useState, useCallback } from "react"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
-import type { Task, Agent, Tool, Skill } from "@/lib/supabase-types"
+import type { Task, Agent, Tool, Skill, Session } from "@/lib/supabase-types"
 import { Skeleton } from "@/components/ui/skeleton"
 import { SetupRequired } from "@/components/setup-required"
+import { AgentFleet } from "@/components/dashboard/agent-fleet"
+import { MissionBoard } from "@/components/dashboard/mission-board"
+import { TokenUsage } from "@/components/dashboard/token-usage"
 
 interface Stats {
   totalTasks: number
@@ -15,6 +19,7 @@ interface Stats {
   pendingReviews: number
   totalAgents: number
   activeAgents: number
+  activeSessions: number
   totalTools: number
   totalSkills: number
 }
@@ -34,105 +39,123 @@ export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [recentTasks, setRecentTasks] = useState<Task[]>([])
   const [leaderboards, setLeaderboards] = useState<Leaderboards>({ agents: [], skills: [], tools: [] })
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [sessions, setSessions] = useState<Session[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const fetchData = useCallback(async () => {
+    if (!supabase) {
+      setLoading(false)
+      return
+    }
+    
+    try {
+      const [
+        { data: tasks },
+        { data: agentsList },
+        { data: tools },
+        { data: skills },
+        { data: skillMessages },
+        { data: toolMessages },
+        { data: sessionsList }
+      ] = await Promise.all([
+        supabase.from("tasks").select("*"),
+        supabase.from("agents").select("*"),
+        supabase.from("tools").select("*"),
+        supabase.from("skills").select("*"),
+        supabase.from("task_messages").select("metadata, task_id").eq("type", "skill_load").not("metadata->skill_name", "is", null),
+        supabase.from("task_messages").select("metadata, task_id").eq("type", "tool_call"),
+        supabase.from("sessions").select("*")
+      ])
+
+      const taskList = tasks || []
+      const agentList = agentsList || []
+      const toolList = tools || []
+      const skillList = skills || []
+      const sessionList = sessionsList || []
+
+      setAgents(agentList)
+      setSessions(sessionList)
+
+      const activeSessions = sessionList.filter((s) => s.status === "active").length
+
+      setStats({
+        totalTasks: taskList.length,
+        runningTasks: taskList.filter(t => t.status === "running").length,
+        completedTasks: taskList.filter(t => t.status === "completed").length,
+        pendingReviews: taskList.filter(t => t.status === "needs_human_review").length,
+        totalAgents: agentList.length,
+        activeAgents: agentList.filter(a => a.is_active).length,
+        activeSessions,
+        totalTools: toolList.length,
+        totalSkills: skillList.length
+      })
+
+      setRecentTasks(taskList.slice(0, 5))
+
+      // Build agent leaderboard from tasks
+      const agentCounts: Record<string, { name: string; count: number }> = {}
+      taskList.forEach(task => {
+        if (task.agent_id) {
+          const agent = agentList.find(a => a.id === task.agent_id)
+          const name = agent?.name || task.agent_slug || "Unknown"
+          agentCounts[task.agent_id] = agentCounts[task.agent_id] || { name, count: 0 }
+          agentCounts[task.agent_id].count++
+        }
+      })
+
+      // Build skill leaderboard - count completed tasks where skill was used
+      const completedTaskIds = new Set(taskList.filter(t => t.status === 'completed').map(t => t.id))
+      const skillTaskSets: Record<string, Set<string>> = {}
+      ;(skillMessages || []).forEach((msg) => {
+        const metadata = msg.metadata as Record<string, unknown> | null
+        const skillName = metadata?.skill_name as string | undefined
+        const taskId = msg.task_id
+        // Only count if task completed successfully
+        if (skillName && taskId && completedTaskIds.has(taskId)) {
+          skillTaskSets[skillName] = skillTaskSets[skillName] || new Set()
+          skillTaskSets[skillName].add(taskId)
+        }
+      })
+      const skillCounts: Record<string, number> = {}
+      Object.entries(skillTaskSets).forEach(([skillName, taskIds]) => {
+        skillCounts[skillName] = taskIds.size
+      })
+
+      // Build tool leaderboard from task_messages
+      const toolCounts: Record<string, number> = {}
+      ;(toolMessages || []).forEach((msg) => {
+        const metadata = msg.metadata as Record<string, unknown> | null
+        const toolName = metadata?.tool_name as string | undefined
+        if (toolName) {
+          // Clean up tool name (e.g. "exa-search__Exa_Search" -> "Exa Search")
+          const cleanName = toolName.split("__").pop()?.replace(/_/g, " ") || toolName
+          toolCounts[cleanName] = (toolCounts[cleanName] || 0) + 1
+        }
+      })
+
+      setLeaderboards({
+        agents: Object.values(agentCounts).sort((a, b) => b.count - a.count).slice(0, 5),
+        skills: Object.entries(skillCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 5),
+        tools: Object.entries(toolCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 5)
+      })
+    } catch (error) {
+      console.error("Failed to fetch dashboard data:", error)
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }, [])
 
   useEffect(() => {
-    async function fetchData() {
-      if (!supabase) {
-        setLoading(false)
-        return
-      }
-      
-      try {
-        const [
-          { data: tasks },
-          { data: agents },
-          { data: tools },
-          { data: skills },
-          { data: skillMessages },
-          { data: toolMessages }
-        ] = await Promise.all([
-          supabase.from("tasks").select("*"),
-          supabase.from("agents").select("*"),
-          supabase.from("tools").select("*"),
-          supabase.from("skills").select("*"),
-          supabase.from("task_messages").select("metadata, task_id").eq("type", "skill_load").not("metadata->skill_name", "is", null),
-          supabase.from("task_messages").select("metadata, task_id").eq("type", "tool_call")
-        ])
-
-        const taskList = tasks || []
-        const agentList = agents || []
-        const toolList = tools || []
-        const skillList = skills || []
-
-        setStats({
-          totalTasks: taskList.length,
-          runningTasks: taskList.filter(t => t.status === "running").length,
-          completedTasks: taskList.filter(t => t.status === "completed").length,
-          pendingReviews: taskList.filter(t => t.status === "needs_human_review").length,
-          totalAgents: agentList.length,
-          activeAgents: agentList.filter(a => a.is_active).length,
-          totalTools: toolList.length,
-          totalSkills: skillList.length
-        })
-
-        setRecentTasks(taskList.slice(0, 5))
-
-        // Build agent leaderboard from tasks
-        const agentCounts: Record<string, { name: string; count: number }> = {}
-        taskList.forEach(task => {
-          if (task.agent_id) {
-            const agent = agentList.find(a => a.id === task.agent_id)
-            const name = agent?.name || task.agent_slug || "Unknown"
-            agentCounts[task.agent_id] = agentCounts[task.agent_id] || { name, count: 0 }
-            agentCounts[task.agent_id].count++
-          }
-        })
-
-        // Build skill leaderboard - count completed tasks where skill was used
-        const completedTaskIds = new Set(taskList.filter(t => t.status === 'completed').map(t => t.id))
-        const skillTaskSets: Record<string, Set<string>> = {}
-        ;(skillMessages || []).forEach((msg) => {
-          const metadata = msg.metadata as Record<string, unknown> | null
-          const skillName = metadata?.skill_name as string | undefined
-          const taskId = msg.task_id
-          // Only count if task completed successfully
-          if (skillName && taskId && completedTaskIds.has(taskId)) {
-            skillTaskSets[skillName] = skillTaskSets[skillName] || new Set()
-            skillTaskSets[skillName].add(taskId)
-          }
-        })
-        const skillCounts: Record<string, number> = {}
-        Object.entries(skillTaskSets).forEach(([skillName, taskIds]) => {
-          skillCounts[skillName] = taskIds.size
-        })
-
-        // Build tool leaderboard from task_messages
-        const toolCounts: Record<string, number> = {}
-        ;(toolMessages || []).forEach((msg) => {
-          const metadata = msg.metadata as Record<string, unknown> | null
-          const toolName = metadata?.tool_name as string | undefined
-          if (toolName) {
-            // Clean up tool name (e.g. "exa-search__Exa_Search" -> "Exa Search")
-            const cleanName = toolName.split("__").pop()?.replace(/_/g, " ") || toolName
-            toolCounts[cleanName] = (toolCounts[cleanName] || 0) + 1
-          }
-        })
-
-        setLeaderboards({
-          agents: Object.values(agentCounts).sort((a, b) => b.count - a.count).slice(0, 5),
-          skills: Object.entries(skillCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 5),
-          tools: Object.entries(toolCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 5)
-        })
-      } catch (error) {
-        console.error("Failed to fetch dashboard data:", error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
     fetchData()
-  }, [])
+  }, [fetchData])
+
+  const handleRefresh = () => {
+    setRefreshing(true)
+    fetchData()
+  }
 
   if (!isSupabaseConfigured) {
     return <SetupRequired />
@@ -161,12 +184,26 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold" data-testid="text-page-title">Dashboard</h1>
-        <p className="text-muted-foreground">Monitor your multi-agent orchestration platform</p>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Radio className="h-6 w-6 text-green-500 animate-pulse" />
+          <div>
+            <h1 className="text-2xl font-bold" data-testid="text-page-title">Dashboard</h1>
+            <p className="text-muted-foreground">Multi-agent orchestration hub</p>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRefresh}
+          disabled={refreshing}
+        >
+          <RefreshCw className={`h-4 w-4 mr-1 ${refreshing ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
             <CardTitle className="text-sm font-medium">Total Tasks</CardTitle>
@@ -188,7 +225,20 @@ export default function Dashboard() {
           <CardContent>
             <div className="text-2xl font-bold" data-testid="text-active-agents">{stats?.activeAgents || 0}</div>
             <p className="text-xs text-muted-foreground">
-              of {stats?.totalAgents || 0} total agents
+              of {stats?.totalAgents || 0} total
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+            <CardTitle className="text-sm font-medium">Active Sessions</CardTitle>
+            <Zap className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats?.activeSessions || 0}</div>
+            <p className="text-xs text-muted-foreground">
+              LLM sessions
             </p>
           </CardContent>
         </Card>
@@ -201,7 +251,7 @@ export default function Dashboard() {
           <CardContent>
             <div className="text-2xl font-bold" data-testid="text-total-tools">{stats?.totalTools || 0}</div>
             <p className="text-xs text-muted-foreground">
-              MCP servers, HTTP APIs, and more
+              MCP & APIs
             </p>
           </CardContent>
         </Card>
@@ -214,7 +264,7 @@ export default function Dashboard() {
           <CardContent>
             <div className="text-2xl font-bold" data-testid="text-pending-reviews">{stats?.pendingReviews || 0}</div>
             <p className="text-xs text-muted-foreground">
-              Awaiting human approval
+              Awaiting approval
             </p>
           </CardContent>
         </Card>
@@ -328,7 +378,13 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Agent Fleet */}
+      <AgentFleet agents={agents} />
+
+      {/* Mission Board + Recent Activity */}
       <div className="grid gap-4 md:grid-cols-2">
+        <MissionBoard tasks={recentTasks} />
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -367,22 +423,10 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Zap className="h-4 w-4" />
-              Skills Overview
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-center py-8">
-              <p className="text-4xl font-bold" data-testid="text-total-skills">{stats?.totalSkills || 0}</p>
-              <p className="text-sm text-muted-foreground mt-1">Agent Skills Available</p>
-            </div>
-          </CardContent>
-        </Card>
       </div>
+
+      {/* Token Usage */}
+      <TokenUsage sessions={sessions} />
     </div>
   )
 }

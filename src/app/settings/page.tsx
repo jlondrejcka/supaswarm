@@ -25,8 +25,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { LLMProvider, ProviderModel } from "@/lib/supabase-types"
-import { Settings, Key, Check, Save, Shield, Trash2, Plus, Lock, AlertCircle, ExternalLink } from "lucide-react"
+import { Settings, Key, Check, Save, Shield, Trash2, Plus, Lock, AlertCircle, ExternalLink, KeyRound } from "lucide-react"
+import { ApiTokensTab } from "@/components/api-tokens-tab"
 
 const ENV_VAR_NAMES: Record<string, string> = {
   xai: "XAI_API_KEY",
@@ -314,7 +316,7 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Settings</h1>
-          <p className="text-muted-foreground">Configure LLM providers and manage secrets</p>
+          <p className="text-muted-foreground">Configure your account and platform</p>
         </div>
         {statusMessage && (
           <Badge variant={statusMessage.type === "success" ? "default" : "destructive"}>
@@ -323,220 +325,221 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {missingRequiredSecrets.length > 0 && (
-        <Card className="border-amber-500/50 bg-amber-500/5">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
-              <AlertCircle className="h-5 w-5" />
-              Required Setup
-            </CardTitle>
-            <CardDescription>
-              Add these secrets to enable full functionality
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {missingRequiredSecrets.map((secret) => (
-              <div key={secret.name} className="space-y-2 p-4 rounded-md border bg-background">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div>
-                    <Label className="font-medium">{secret.label}</Label>
-                    <p className="text-sm text-muted-foreground">{secret.description}</p>
-                  </div>
-                  {secret.helpUrl && (
-                    <a 
-                      href={secret.helpUrl} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-sm text-primary flex items-center gap-1"
-                    >
-                      Get key <ExternalLink className="h-3 w-3" />
-                    </a>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <Input
-                    type="password"
-                    placeholder="Paste your key here"
-                    value={quickSecretValues[secret.name] || ""}
-                    onChange={(e) => setQuickSecretValues(prev => ({ ...prev, [secret.name]: e.target.value }))}
-                    data-testid={`input-quick-${secret.name}`}
-                  />
-                  <Button
-                    onClick={() => handleQuickSaveSecret(secret.name, secret.description)}
-                    disabled={!quickSecretValues[secret.name]?.trim() || savingQuickSecret === secret.name}
-                    data-testid={`button-save-${secret.name}`}
-                  >
-                    {savingQuickSecret === secret.name ? "Saving..." : "Save"}
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+      <Tabs defaultValue="llm-providers" className="space-y-6">
+        <TabsList className="grid w-full max-w-md grid-cols-3">
+          <TabsTrigger value="llm-providers" className="flex items-center gap-2">
+            <Key className="h-4 w-4" />
+            <span className="hidden sm:inline">LLM Providers</span>
+          </TabsTrigger>
+          <TabsTrigger value="vault" className="flex items-center gap-2">
+            <Shield className="h-4 w-4" />
+            <span className="hidden sm:inline">Vault</span>
+          </TabsTrigger>
+          <TabsTrigger value="api-tokens" className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4" />
+            <span className="hidden sm:inline">API Tokens</span>
+          </TabsTrigger>
+        </TabsList>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Key className="h-5 w-5" />
-            LLM Providers
-          </CardTitle>
-          <CardDescription>
-            Configure AI model providers for agent orchestration
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="space-y-3">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="flex items-center gap-4 p-3 rounded-md border">
-                  <Skeleton className="h-5 w-32" />
-                  <Skeleton className="h-4 w-24" />
-                </div>
-              ))}
-            </div>
-          ) : providers.length === 0 ? (
-            <p className="text-center text-muted-foreground py-4">No providers configured</p>
-          ) : (
-            <div className="space-y-3">
-              {providers.map((provider) => {
-                const providerEnvVar = ENV_VAR_NAMES[provider.name] || `${provider.name.toUpperCase()}_API_KEY`
-                const hasVaultKey = vaultSecrets.some(s => s.secret_name === providerEnvVar)
-                
-                return (
-                  <div key={provider.id} className="flex items-center gap-4 p-3 rounded-md border">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium" data-testid={`text-provider-${provider.id}`}>
-                          {provider.display_name}
-                        </span>
-                        <Badge 
-                          variant={provider.is_active ? "default" : "secondary"}
-                          className="cursor-pointer"
-                          onClick={() => toggleActive(provider)}
-                          data-testid={`badge-status-${provider.id}`}
-                        >
-                          {provider.is_active ? "Active" : "Inactive"}
-                        </Badge>
-                        {hasVaultKey && (
-                          <Badge variant="outline" className="gap-1 bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">
-                            <Check className="h-3 w-3" />
-                            Key in Vault
-                          </Badge>
-                        )}
+        {/* LLM Providers Tab */}
+        <TabsContent value="llm-providers" className="space-y-6">
+          {missingRequiredSecrets.length > 0 && (
+            <Card className="border-amber-500/50 bg-amber-500/5">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                  <AlertCircle className="h-5 w-5" />
+                  Required Setup
+                </CardTitle>
+                <CardDescription>
+                  Add these secrets to enable full functionality
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {missingRequiredSecrets.map((secret) => (
+                  <div key={secret.name} className="space-y-2 p-4 rounded-md border bg-background">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div>
+                        <Label className="font-medium">{secret.label}</Label>
+                        <p className="text-sm text-muted-foreground">{secret.description}</p>
                       </div>
-                      <p className="text-sm text-muted-foreground">
-                        Default model: {provider.default_model}
-                      </p>
+                      {secret.helpUrl && (
+                        <a 
+                          href={secret.helpUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-sm text-primary flex items-center gap-1"
+                        >
+                          Get key <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={() => openConfigDialog(provider)}
-                        data-testid={`button-configure-${provider.id}`}
+                    <div className="flex gap-2">
+                      <Input
+                        type="password"
+                        placeholder="Paste your key here"
+                        value={quickSecretValues[secret.name] || ""}
+                        onChange={(e) => setQuickSecretValues(prev => ({ ...prev, [secret.name]: e.target.value }))}
+                        data-testid={`input-quick-${secret.name}`}
+                      />
+                      <Button
+                        onClick={() => handleQuickSaveSecret(secret.name, secret.description)}
+                        disabled={!quickSecretValues[secret.name]?.trim() || savingQuickSecret === secret.name}
+                        data-testid={`button-save-${secret.name}`}
                       >
-                        <Settings className="h-4 w-4" />
-                        Configure
+                        {savingQuickSecret === secret.name ? "Saving..." : "Save"}
                       </Button>
                     </div>
                   </div>
-                )
-              })}
-            </div>
+                ))}
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div>
+          <Card>
+            <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Shield className="h-5 w-5" />
-                Vault Secrets
+                <Key className="h-5 w-5" />
+                LLM Providers
               </CardTitle>
               <CardDescription>
-                Securely stored secrets for the platform
+                Configure AI model providers for agent orchestration
               </CardDescription>
-            </div>
-            <Button onClick={() => setNewSecretDialog(true)} data-testid="button-add-secret">
-              <Plus className="h-4 w-4" />
-              Add Secret
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {vaultLoading ? (
-            <div className="space-y-3">
-              {[1, 2].map((i) => (
-                <div key={i} className="flex items-center gap-4 p-3 rounded-md border">
-                  <Skeleton className="h-5 w-48" />
-                  <Skeleton className="h-4 w-24" />
-                </div>
-              ))}
-            </div>
-          ) : vaultSecrets.length === 0 ? (
-            <div className="text-center py-8">
-              <Lock className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
-              <p className="text-muted-foreground">No secrets stored in Vault</p>
-              <p className="text-sm text-muted-foreground mt-1">Add API keys and other secrets to get started</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {vaultSecrets.map((secret) => (
-                <div key={secret.secret_name} className="flex items-center gap-4 p-3 rounded-md border">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <code className="text-sm font-mono bg-muted px-2 py-0.5 rounded" data-testid={`text-secret-${secret.secret_name}`}>
-                        {secret.secret_name}
-                      </code>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="flex items-center gap-4 p-3 rounded-md border">
+                      <Skeleton className="h-5 w-32" />
+                      <Skeleton className="h-4 w-24" />
                     </div>
-                    {secret.description && (
-                      <p className="text-sm text-muted-foreground mt-1">{secret.description}</p>
-                    )}
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleDeleteSecret(secret.secret_name)}
-                    data-testid={`button-delete-${secret.secret_name}`}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+              ) : providers.length === 0 ? (
+                <p className="text-center text-muted-foreground py-4">No providers configured</p>
+              ) : (
+                <div className="space-y-3">
+                  {providers.map((provider) => {
+                    const providerEnvVar = ENV_VAR_NAMES[provider.name] || `${provider.name.toUpperCase()}_API_KEY`
+                    const hasVaultKey = vaultSecrets.some(s => s.secret_name === providerEnvVar)
+                    
+                    return (
+                      <div key={provider.id} className="flex items-center gap-4 p-3 rounded-md border">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium" data-testid={`text-provider-${provider.id}`}>
+                              {provider.display_name}
+                            </span>
+                            <Badge 
+                              variant={provider.is_active ? "default" : "secondary"}
+                              className="cursor-pointer"
+                              onClick={() => toggleActive(provider)}
+                              data-testid={`badge-status-${provider.id}`}
+                            >
+                              {provider.is_active ? "Active" : "Inactive"}
+                            </Badge>
+                            {hasVaultKey && (
+                              <Badge variant="outline" className="gap-1 bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">
+                                <Check className="h-3 w-3" />
+                                Key in Vault
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            Default model: {provider.default_model}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => openConfigDialog(provider)}
+                            data-testid={`button-configure-${provider.id}`}
+                          >
+                            <Settings className="h-4 w-4" />
+                            Configure
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Platform Settings</CardTitle>
-          <CardDescription>
-            General platform configuration
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between gap-4 p-3 rounded-md border flex-wrap">
-              <div>
-                <p className="font-medium">Supabase Project</p>
-                <p className="text-sm text-muted-foreground font-mono">bgqxccmdcpegvbuxmnrf</p>
+        {/* Vault Tab */}
+        <TabsContent value="vault" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Shield className="h-5 w-5" />
+                    Vault Secrets
+                  </CardTitle>
+                  <CardDescription>
+                    Securely stored secrets for the platform
+                  </CardDescription>
+                </div>
+                <Button onClick={() => setNewSecretDialog(true)} data-testid="button-add-secret">
+                  <Plus className="h-4 w-4" />
+                  Add Secret
+                </Button>
               </div>
-              <Badge variant="outline">Connected</Badge>
-            </div>
-            <div className="flex items-center justify-between gap-4 p-3 rounded-md border flex-wrap">
-              <div>
-                <p className="font-medium">Real-time Updates</p>
-                <p className="text-sm text-muted-foreground">Subscribe to task and agent changes</p>
-              </div>
-              <Badge variant="secondary">Coming Soon</Badge>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+            </CardHeader>
+            <CardContent>
+              {vaultLoading ? (
+                <div className="space-y-3">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="flex items-center gap-4 p-3 rounded-md border">
+                      <Skeleton className="h-5 w-48" />
+                      <Skeleton className="h-4 w-24" />
+                    </div>
+                  ))}
+                </div>
+              ) : vaultSecrets.length === 0 ? (
+                <div className="text-center py-8">
+                  <Lock className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+                  <p className="text-muted-foreground">No secrets stored in Vault</p>
+                  <p className="text-sm text-muted-foreground mt-1">Add API keys and other secrets to get started</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {vaultSecrets.map((secret) => (
+                    <div key={secret.secret_name} className="flex items-center gap-4 p-3 rounded-md border">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <code className="text-sm font-mono bg-muted px-2 py-0.5 rounded" data-testid={`text-secret-${secret.secret_name}`}>
+                            {secret.secret_name}
+                          </code>
+                        </div>
+                        {secret.description && (
+                          <p className="text-sm text-muted-foreground mt-1">{secret.description}</p>
+                        )}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDeleteSecret(secret.secret_name)}
+                        data-testid={`button-delete-${secret.secret_name}`}
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* API Tokens Tab */}
+        <TabsContent value="api-tokens">
+          <ApiTokensTab />
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
