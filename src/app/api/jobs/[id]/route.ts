@@ -42,7 +42,7 @@ export async function GET(
       .eq("channel_id", id)
       .in("status", ["active", "idle"]);
 
-    let runningTasks = [];
+    let runningTasks: Array<{ id: string; status: string; created_at: string | null; session_id: string | null; agent_slug: string | null }> = [];
     if (sessions && sessions.length > 0) {
       const sessionIds = sessions.map(s => s.id);
       const { data: tasks } = await supabase

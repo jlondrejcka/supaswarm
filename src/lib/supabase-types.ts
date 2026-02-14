@@ -46,14 +46,17 @@ export type Database = {
         Row: {
           agent_id: string
           tool_id: string
+          inherited_from_skill_id: string | null
         }
         Insert: {
           agent_id: string
           tool_id: string
+          inherited_from_skill_id?: string | null
         }
         Update: {
           agent_id?: string
           tool_id?: string
+          inherited_from_skill_id?: string | null
         }
         Relationships: [
           {
@@ -87,6 +90,9 @@ export type Database = {
           name: string
           provider_id: string | null
           role: string | null
+          slack_app_id: string | null
+          slack_bot_token_secret: string | null
+          slack_signing_secret_name: string | null
           slug: string
           status: string | null
           system_prompt: string
@@ -107,6 +113,9 @@ export type Database = {
           name: string
           provider_id?: string | null
           role?: string | null
+          slack_app_id?: string | null
+          slack_bot_token_secret?: string | null
+          slack_signing_secret_name?: string | null
           slug: string
           status?: string | null
           system_prompt: string
@@ -127,6 +136,9 @@ export type Database = {
           name?: string
           provider_id?: string | null
           role?: string | null
+          slack_app_id?: string | null
+          slack_bot_token_secret?: string | null
+          slack_signing_secret_name?: string | null
           slug?: string
           status?: string | null
           system_prompt?: string
@@ -352,6 +364,36 @@ export type Database = {
           },
         ]
       }
+      skill_tools: {
+        Row: {
+          skill_id: string
+          tool_id: string
+        }
+        Insert: {
+          skill_id: string
+          tool_id: string
+        }
+        Update: {
+          skill_id?: string
+          tool_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "skill_tools_skill_id_fkey"
+            columns: ["skill_id"]
+            isOneToOne: false
+            referencedRelation: "skills"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "skill_tools_tool_id_fkey"
+            columns: ["tool_id"]
+            isOneToOne: false
+            referencedRelation: "tools"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       skills: {
         Row: {
           created_at: string | null
@@ -410,6 +452,8 @@ export type Database = {
           session_id: string | null
           status: string
           storage_paths: string[] | null
+          tokens_input: number
+          tokens_output: number
           updated_at: string | null
         }
         Insert: {
@@ -430,6 +474,8 @@ export type Database = {
           session_id?: string | null
           status?: string
           storage_paths?: string[] | null
+          tokens_input?: number
+          tokens_output?: number
           updated_at?: string | null
         }
         Update: {
@@ -450,6 +496,8 @@ export type Database = {
           session_id?: string | null
           status?: string
           storage_paths?: string[] | null
+          tokens_input?: number
+          tokens_output?: number
           updated_at?: string | null
         }
         Relationships: [
@@ -755,6 +803,7 @@ export type HumanReview = Tables<'human_reviews'>
 export type ApprovalRequest = Tables<'approval_requests'>
 export type AgentTool = Tables<'agent_tools'>
 export type AgentSkill = Tables<'agent_skills'>
+export type SkillTool = Tables<'skill_tools'>
 export type Session = Tables<'sessions'>
 
 export type TaskStatus = 'pending' | 'queued' | 'running' | 'pending_subtask' | 'needs_human_review' | 'completed' | 'failed' | 'cancelled'

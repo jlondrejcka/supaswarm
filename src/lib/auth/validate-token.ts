@@ -150,8 +150,7 @@ export async function validateApiToken(token: string): Promise<TokenAuth> {
       .from('api_tokens')
       .update({ last_used_at: new Date().toISOString() })
       .eq('id', tokenData.id)
-      .then()
-      .catch(err => console.error('[validate-token] Failed to update last_used_at:', err))
+      .then(() => {}, err => console.error('[validate-token] Failed to update last_used_at:', err))
     
     return {
       valid: true,

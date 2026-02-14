@@ -16,7 +16,8 @@ import {
   Radio,
   MessageCircle,
   Clock,
-  Network
+  Network,
+  Inbox
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -27,16 +28,20 @@ import { ThemeToggle } from "@/components/theme-toggle"
 
 const navItems = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
+  { href: "/approvals", icon: Inbox, label: "Approvals" },
   { href: "/chat", icon: MessageCircle, label: "Chat" },
-  { href: "/tasks", icon: ListTodo, label: "Tasks" },
   { href: "/jobs", icon: Clock, label: "Jobs" },
-  { href: "/sessions", icon: Radio, label: "Sessions" },
+  { href: "/sessions", icon: Radio, label: "Session" },
+  { href: "/tasks", icon: ListTodo, label: "Tasks" },
+  { section: true },
   { href: "/channels", icon: Network, label: "Channels" },
   { href: "/agents", icon: Bot, label: "Agents" },
   { href: "/skills", icon: Zap, label: "Skills" },
   { href: "/tools", icon: Wrench, label: "Tools" },
-  { href: "/reviews", icon: Users, label: "Reviews" },
+  { section: true },
 ]
+
+const settingsItem = { href: "/settings", icon: Settings, label: "Settings" }
 
 interface SidebarContextType {
   collapsed: boolean
@@ -158,8 +163,13 @@ export function Sidebar() {
       
       <ScrollArea className="flex-1 py-2">
         <nav className="space-y-1 px-2">
-          {navItems.map((item) => {
-            const isActive = pathname === item.href || 
+          {navItems.map((item, idx) => {
+            if (item.section) {
+              return <Separator key={`section-${idx}`} className="my-4" />
+            }
+            if (!item.href) return null
+            
+            const isActive = pathname === item.href ||
               (item.href !== "/" && pathname.startsWith(item.href))
             
             return (
@@ -175,14 +185,12 @@ export function Sidebar() {
           })}
         </nav>
         
-        <Separator className="my-4" />
-        
         <nav className="space-y-1 px-2">
           <NavLink
-            href="/settings"
-            icon={Settings}
-            label="Settings"
-            isActive={pathname === "/settings"}
+            href={settingsItem.href}
+            icon={settingsItem.icon}
+            label={settingsItem.label}
+            isActive={pathname === settingsItem.href}
             collapsed={collapsed}
           />
           <div className={cn(

@@ -41,12 +41,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_activity ON public.sessions(last_activit
 -- =============================================
 -- TASKS TABLE CHANGES
 -- =============================================
--- Add session reference
+-- Add session reference (master_task_id migration happens in 20260207000006)
 ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS session_id UUID REFERENCES public.sessions(id) ON DELETE SET NULL;
-
--- Drop master_task_id (replaced by session_id)
-DROP INDEX IF EXISTS idx_tasks_master_task_id;
-ALTER TABLE public.tasks DROP COLUMN IF EXISTS master_task_id;
 
 -- Mission Control extensions
 ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS mission_status TEXT

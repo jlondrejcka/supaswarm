@@ -616,6 +616,8 @@ Deno.serve(async (req) => {
     const MAX_TOOL_ITERATIONS = 10;
     let iteration = 0;
     let totalToolCallsCount = 0;
+    let totalTaskTokensInput = 0;
+    let totalTaskTokensOutput = 0;
 
     // Build initial messages for the agentic loop
     const loopMessages: LLMMessage[] = [];
@@ -670,12 +672,47 @@ Deno.serve(async (req) => {
         llmResponse = choice?.message?.content || "";
         toolCalls = choice?.message?.tool_calls || [];
 
+        const usage = data.usage ?? {};
+        const inputTokens = Number(usage.prompt_tokens) || 0;
+        const outputTokens = Number(usage.completion_tokens) || 0;
+        totalTaskTokensInput += inputTokens;
+        totalTaskTokensOutput += outputTokens;
+
+        const toolCallNames = toolCalls.map((tc) => tc.function.name);
+        const skillLoads = toolCalls
+          .filter((tc) => tc.function.name === "load_skill")
+          .map((tc) => {
+            try {
+              const args = JSON.parse(tc.function.arguments || "{}");
+              return { skill_id: String(args.skill_id ?? ""), skill_name: undefined as string | undefined };
+            } catch {
+              return { skill_id: "", skill_name: undefined };
+            }
+          });
+
         console.log("[MAIN] LLM response", {
           iteration,
           has_content: !!llmResponse,
           tool_call_count: toolCalls.length,
           usage: data.usage,
         });
+
+        await logger.logThinking(
+          `LLM responded${toolCalls.length > 0 ? ` with ${toolCalls.length} tool call(s)` : ""}`,
+          {
+            step: "llm_response_received",
+            has_tool_calls: toolCalls.length > 0,
+            tool_call_count: toolCalls.length,
+            iteration,
+          },
+          {
+            tokenUsage: { input: inputTokens, output: outputTokens },
+            attribution:
+              toolCallNames.length > 0
+                ? { tool_calls: toolCallNames, skill_loads: skillLoads.length > 0 ? skillLoads : undefined }
+                : undefined,
+          },
+        );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         if (iteration === 1) {
@@ -693,13 +730,6 @@ Deno.serve(async (req) => {
         llmResponse = `Tool loop error on iteration ${iteration}: ${errorMsg}`;
         break;
       }
-
-      await logger.logThinking(`LLM responded${toolCalls.length > 0 ? ` with ${toolCalls.length} tool call(s)` : ""}`, {
-        step: "llm_response_received",
-        has_tool_calls: toolCalls.length > 0,
-        tool_call_count: toolCalls.length,
-        iteration,
-      });
 
       // No tool calls = LLM is done, break
       if (toolCalls.length === 0) break;
@@ -1256,7 +1286,17 @@ Deno.serve(async (req) => {
 
     // Update task — use RPC to bypass PostgREST PATCH which silently fails
     // when AFTER UPDATE triggers (check_spawn_completion) do cascading work.
-    const completionOutput = { response: llmResponse };
+    const completionOutput = {
+      response: llmResponse,
+      usage:
+        totalTaskTokensInput > 0 || totalTaskTokensOutput > 0
+          ? {
+              prompt_tokens: totalTaskTokensInput,
+              completion_tokens: totalTaskTokensOutput,
+              total_tokens: totalTaskTokensInput + totalTaskTokensOutput,
+            }
+          : undefined,
+    };
     const completionIntermediateData = {
       execution_log: {
         total_duration_ms: totalDuration,
@@ -1298,8 +1338,20 @@ Deno.serve(async (req) => {
       console.error("[MAIN] CRITICAL: Failed to mark task completed after 3 attempts", { task_id });
     }
 
-    // Update session last activity (fire-and-forget)
-    if (task.session_id) {
+    // Roll up token usage to task and session
+    if (totalTaskTokensInput > 0 || totalTaskTokensOutput > 0) {
+      await supabase
+        .from("tasks")
+        .update({ tokens_input: totalTaskTokensInput, tokens_output: totalTaskTokensOutput })
+        .eq("id", task_id);
+      if (task.session_id) {
+        await supabase.rpc("increment_session_tokens", {
+          p_session_id: task.session_id,
+          p_tokens_input: totalTaskTokensInput,
+          p_tokens_output: totalTaskTokensOutput,
+        });
+      }
+    } else if (task.session_id) {
       supabase
         .from("sessions")
         .update({ last_activity_at: new Date().toISOString() })
@@ -1307,7 +1359,12 @@ Deno.serve(async (req) => {
         .then(() => {});
     }
 
-    await logger.logComplete(llmResponse, { total_duration_ms: totalDuration });
+    await logger.logComplete(llmResponse, {
+      total_duration_ms: totalDuration,
+      ...(totalTaskTokensInput > 0 || totalTaskTokensOutput > 0
+        ? { tokens_input: totalTaskTokensInput, tokens_output: totalTaskTokensOutput }
+        : {}),
+    });
 
     console.log("[MAIN] Task completed", { task_id, duration_ms: totalDuration });
 

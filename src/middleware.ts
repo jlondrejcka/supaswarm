@@ -13,9 +13,21 @@ const PUBLIC_ROUTES = [
   '/api/auth/login',
   '/api/auth/signup',
   '/api/auth/verify-token', // Allow token verification endpoint
+  '/api/vault', // Vault uses its own auth (Supabase RPC)
   '/_next',
   '/favicon.ico',
   '/public'
+]
+
+// Routes that require API token validation
+const PROTECTED_API_ROUTES = [
+  '/api/dashboard',
+  '/api/approvals',
+  '/api/chats',
+  '/api/sessions',
+  '/api/tasks',
+  '/api/channels',
+  '/api/agents'
 ]
 
 export async function middleware(req: NextRequest) {
@@ -26,32 +38,35 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next()
   }
   
+  // Check if this is a protected API route that requires token auth
+  const isProtectedApiRoute = PROTECTED_API_ROUTES.some(route =>
+    path.startsWith(route)
+  )
+
   // Check for API token in Authorization header
   const authHeader = req.headers.get('authorization')
   const token = authHeader?.replace(/^Bearer\s+/i, '')
-  
-  if (token && token.startsWith('ss_live_')) {
-    // For API routes, validate token via internal API call
-    if (path.startsWith('/api/')) {
+
+  if (isProtectedApiRoute) {
+    // Protected API routes require token auth
+    if (token && token.startsWith('ss_live_')) {
       try {
         // Call internal verification endpoint
         const verifyUrl = new URL('/api/auth/verify-token', req.url)
         const verifyRes = await fetch(verifyUrl, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json'
           },
           body: JSON.stringify({
             token,
             path,
             method: req.method,
             origin: req.headers.get('origin'),
-            // Pass user context header for user token validation
-            // In a real implementation, this would come from Supabase auth session
             userIdContext: req.headers.get('x-user-id-context')
           })
         })
-        
+
         if (!verifyRes.ok) {
           const error = await verifyRes.json()
           return NextResponse.json(
@@ -59,9 +74,9 @@ export async function middleware(req: NextRequest) {
             { status: verifyRes.status }
           )
         }
-        
+
         const auth = await verifyRes.json()
-        
+
         // Attach auth context to request headers
         const response = NextResponse.next()
         response.headers.set('x-token-id', auth.token_id)
@@ -69,16 +84,22 @@ export async function middleware(req: NextRequest) {
         if (auth.user_id) {
           response.headers.set('x-user-id', auth.user_id)
         }
-        
+
         // Set CORS headers if origin present
         const origin = req.headers.get('origin')
         if (origin) {
           response.headers.set('Access-Control-Allow-Origin', origin)
           response.headers.set('Access-Control-Allow-Credentials', 'true')
-          response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
-          response.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+          response.headers.set(
+            'Access-Control-Allow-Methods',
+            'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+          )
+          response.headers.set(
+            'Access-Control-Allow-Headers',
+            'Authorization, Content-Type'
+          )
         }
-        
+
         return response
       } catch (error) {
         console.error('[middleware] Token verification failed:', error)
@@ -87,18 +108,33 @@ export async function middleware(req: NextRequest) {
           { status: 500 }
         )
       }
+    } else {
+      // Protected route without valid token
+      return NextResponse.json(
+        { error: 'API token required' },
+        { status: 401 }
+      )
     }
   }
-  
-  // For non-API routes without token, fall back to session-based auth
-  // (Existing Supabase auth check would go here)
-  
-  // For API routes without valid token, require auth
-  if (path.startsWith('/api/') && !path.startsWith('/api/auth/')) {
-    return NextResponse.json(
-      { error: 'Authentication required' },
-      { status: 401 }
-    )
+
+  // For other API routes, allow through
+  if (token && token.startsWith('ss_live_')) {
+    // Verify token for audit/tracking (optional)
+    const response = NextResponse.next()
+    const origin = req.headers.get('origin')
+    if (origin) {
+      response.headers.set('Access-Control-Allow-Origin', origin)
+      response.headers.set('Access-Control-Allow-Credentials', 'true')
+      response.headers.set(
+        'Access-Control-Allow-Methods',
+        'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+      )
+      response.headers.set(
+        'Access-Control-Allow-Headers',
+        'Authorization, Content-Type'
+      )
+    }
+    return response
   }
   
   return NextResponse.next()

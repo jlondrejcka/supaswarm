@@ -56,21 +56,21 @@ export default function ContextGraphsPage() {
     try {
       // Fetch context stories
       const { data: storiesData, error: storiesError } = await supabase
-        .from("context_stories")
+        .from("context_stories" as any)
         .select("*")
         .order("updated_at", { ascending: false })
 
       if (storiesError) throw storiesError
-      setStories(storiesData || [])
+      setStories((storiesData || []) as unknown as ContextStory[])
 
       // Fetch graph stats
       const [nodesResult, edgesResult] = await Promise.all([
-        supabase.from("graph_nodes").select("entity_type"),
-        supabase.from("graph_edges").select("edge_type"),
+        supabase.from("graph_nodes" as any).select("entity_type"),
+        supabase.from("graph_edges" as any).select("edge_type"),
       ])
 
-      const nodes = nodesResult.data || []
-      const edges = edgesResult.data || []
+      const nodes = (nodesResult.data || []) as unknown as Array<{ entity_type: string }>
+      const edges = (edgesResult.data || []) as unknown as Array<{ edge_type: string }>
 
       const nodesByType = nodes.reduce((acc, n) => {
         acc[n.entity_type] = (acc[n.entity_type] || 0) + 1

@@ -151,9 +151,9 @@ export default function ChannelsPage() {
       )
 
       // Load default agent from slack channel_connection config
-      const slackConn = (channelsData || []).find((c: any) => c.channel_type === "slack")
+      const slackConn = (channelsData || []).find((c: any) => c.channel_type === "slack") as { config?: { default_agent_id?: string } } | undefined
       if (slackConn?.config?.default_agent_id) {
-        setDefaultAgentId(slackConn.config.default_agent_id as string)
+        setDefaultAgentId(slackConn.config.default_agent_id)
       }
 
       setChannels(channelsWithAgents)

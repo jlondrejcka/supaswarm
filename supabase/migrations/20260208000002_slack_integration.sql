@@ -58,9 +58,11 @@ CREATE TABLE IF NOT EXISTS public.app_config (
 ALTER TABLE public.app_config ENABLE ROW LEVEL SECURITY;
 COMMENT ON TABLE public.app_config IS 'Internal config for triggers. RLS enabled, no policies = server-only access.';
 
--- Seed supabase_url (service_role_key not needed — slack-reply uses verify_jwt=false)
-INSERT INTO public.app_config (key, value) VALUES
-  ('supabase_url', current_setting('app.settings.supabase_url', true))
+-- Seed supabase_url when configured (null in shadow db / unconfigured envs is ok)
+INSERT INTO public.app_config (key, value)
+SELECT 'supabase_url', v
+FROM (SELECT current_setting('app.settings.supabase_url', true) AS v) s
+WHERE s.v IS NOT NULL
 ON CONFLICT (key) DO NOTHING;
 
 -- 5. Trigger: auto-flag task_messages for Slack delivery + invoke slack-reply

@@ -38,8 +38,8 @@ type ScheduledJob = {
 type JobTask = {
   id: string;
   status: string;
-  created_at: string;
-  session_id: string;
+  created_at: string | null;
+  session_id: string | null;
 };
 
 export default function JobsPage() {
@@ -77,19 +77,20 @@ export default function JobsPage() {
   }, [jobs.length]); // Only re-create interval when jobs count changes
 
   async function fetchJobs() {
+    if (!supabase) return;
     setLoading(true);
     const { data, error } = await supabase
-      .from("scheduled_jobs")
+      .from("scheduled_jobs" as any)
       .select("*")
       .order("created_at", { ascending: false });
 
     if (error) {
       console.error("Error fetching jobs:", error);
     } else {
-      setJobs(data || []);
+      setJobs((data || []) as unknown as ScheduledJob[]);
       // Fetch active tasks with the fresh data
       if (data && data.length > 0) {
-        fetchActiveTasksForJobs(data);
+        fetchActiveTasksForJobs((data || []) as unknown as ScheduledJob[]);
       }
     }
     setLoading(false);
@@ -100,7 +101,7 @@ export default function JobsPage() {
   }
 
   async function fetchActiveTasksForJobs(jobsList: ScheduledJob[]) {
-    if (jobsList.length === 0) return;
+    if (!supabase || jobsList.length === 0) return;
 
     const jobIds = jobsList.map(j => j.id);
     
@@ -149,6 +150,7 @@ export default function JobsPage() {
   }
 
   async function fetchAgents() {
+    if (!supabase) return;
     const { data, error } = await supabase
       .from("agents")
       .select("id, name, slug")
@@ -193,7 +195,8 @@ export default function JobsPage() {
       };
     }
 
-    const { data, error } = await supabase.rpc("upsert_scheduled_job", {
+    if (!supabase) return;
+    const { data, error } = await (supabase as any).rpc("upsert_scheduled_job", {
       p_name: formName,
       p_description: formDescription || null,
       p_agent_id: formAgentId,
@@ -215,8 +218,9 @@ export default function JobsPage() {
   }
 
   async function toggleJobActive(jobId: string, currentState: boolean) {
+    if (!supabase) return;
     const { error } = await supabase
-      .from("scheduled_jobs")
+      .from("scheduled_jobs" as any)
       .update({ is_active: !currentState })
       .eq("id", jobId);
 
@@ -229,8 +233,9 @@ export default function JobsPage() {
 
   async function deleteJob(jobId: string) {
     if (!confirm("Delete this scheduled job?")) return;
+    if (!supabase) return;
 
-    const { error } = await supabase.rpc("delete_scheduled_job", {
+    const { error } = await (supabase as any).rpc("delete_scheduled_job", {
       p_job_id: jobId,
     });
 
@@ -249,6 +254,7 @@ export default function JobsPage() {
     }
 
     if (!confirm(`Cancel ${tasks.length} running task(s)?`)) return;
+    if (!supabase) return;
 
     for (const task of tasks) {
       await supabase
@@ -562,7 +568,7 @@ export default function JobsPage() {
                               <ExternalLink className="h-3 w-3" />
                             </a>
                             <span className="text-muted-foreground">
-                              {new Date(task.created_at).toLocaleTimeString()}
+                              {task.created_at ? new Date(task.created_at).toLocaleTimeString() : "-"}
                             </span>
                           </div>
                         ))}

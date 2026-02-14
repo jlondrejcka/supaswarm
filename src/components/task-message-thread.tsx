@@ -117,7 +117,7 @@ export function TaskMessageThread({ taskId, variant = "log" }: TaskMessageThread
           filter: `task_id=eq.${taskId}`,
         },
         (payload) => {
-          setMessages(prev => [...prev, payload.new as TaskMessage].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()))
+          setMessages(prev => [...prev, payload.new as TaskMessage].sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()))
         }
       )
       .subscribe()

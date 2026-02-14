@@ -1,69 +1,28 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
-import type { Agent, LLMProvider, Tool, Skill, ProviderModel } from "@/lib/supabase-types"
+import type { Agent, Tool, Skill } from "@/lib/supabase-types"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { AgentHierarchyView } from "@/components/agent-hierarchy-view"
-import { Plus, Bot, Settings2, Save, Wrench, Zap, Star, Heart, LayoutGrid, GitBranch, EyeOff } from "lucide-react"
+import { Plus, Bot, Wrench, Zap, Star, Heart, LayoutGrid, GitBranch, EyeOff } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 
 export default function AgentsPage() {
+  const router = useRouter()
   const [agents, setAgents] = useState<Agent[]>([])
-  const [providers, setProviders] = useState<LLMProvider[]>([])
-  const [providerModels, setProviderModels] = useState<ProviderModel[]>([])
   const [tools, setTools] = useState<Tool[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
   const [loading, setLoading] = useState(true)
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [formData, setFormData] = useState({
-    name: "",
-    slug: "",
-    description: "",
-    system_prompt: "",
-    model: "",
-    provider_id: "",
-    temperature: "0.7",
-    max_tokens: "4096",
-    is_default: false,
-    role: "",
-    memory_mode: "none",
-    daily_token_budget: "",
-  })
-  const [selectedTools, setSelectedTools] = useState<string[]>([])
-  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [agentTools, setAgentTools] = useState<Record<string, string[]>>({})
   const [agentSkills, setAgentSkills] = useState<Record<string, string[]>>({})
   const [viewMode, setViewMode] = useState<"cards" | "hierarchy">("cards")
@@ -87,16 +46,12 @@ export default function AgentsPage() {
     try {
       const [
         { data: agentsData },
-        { data: providersData },
-        { data: providerModelsData },
         { data: toolsData },
         { data: skillsData },
         { data: agentToolsData },
         { data: agentSkillsData }
       ] = await Promise.all([
         supabase.from("agents").select("*").order("is_default", { ascending: false }).order("created_at", { ascending: false }),
-        supabase.from("llm_providers").select("*").eq("is_active", true),
-        supabase.from("provider_models").select("*").eq("is_enabled", true).order("model_name"),
         supabase.from("tools").select("*").eq("is_active", true),
         supabase.from("skills").select("*").eq("is_active", true),
         supabase.from("agent_tools").select("*"),
@@ -104,8 +59,6 @@ export default function AgentsPage() {
       ])
       
       setAgents(agentsData || [])
-      setProviders(providersData || [])
-      setProviderModels(providerModelsData || [])
       setTools(toolsData || [])
       setSkills(skillsData || [])
       
@@ -129,69 +82,8 @@ export default function AgentsPage() {
     }
   }
 
-  function openCreateDialog() {
-    setEditingAgent(null)
-    setFormData({
-      name: "",
-      slug: "",
-      description: "",
-      system_prompt: "You are a helpful AI assistant.",
-      model: "",
-      provider_id: "",
-      temperature: "0.7",
-      max_tokens: "4096",
-      is_default: false,
-      role: "",
-      memory_mode: "none",
-      daily_token_budget: "",
-    })
-    setSelectedTools([])
-    setSelectedSkills([])
-    setDialogOpen(true)
-  }
-
-  function openEditDialog(agent: Agent) {
-    setEditingAgent(agent)
-    setFormData({
-      name: agent.name,
-      slug: agent.slug,
-      description: agent.description || "",
-      system_prompt: agent.system_prompt,
-      model: agent.model || "",
-      provider_id: agent.provider_id || "",
-      temperature: String(agent.temperature ?? 0.7),
-      max_tokens: String(agent.max_tokens ?? 4096),
-      is_default: agent.is_default || false,
-      role: agent.role || "",
-      memory_mode: agent.memory_mode || "none",
-      daily_token_budget: agent.daily_token_budget != null ? String(agent.daily_token_budget) : "",
-    })
-    setSelectedTools(agentTools[agent.id] || [])
-    setSelectedSkills(agentSkills[agent.id] || [])
-    setDialogOpen(true)
-  }
-
-  function generateSlug(name: string) {
-    return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-  }
-
-  function toggleTool(toolId: string) {
-    setSelectedTools(prev => 
-      prev.includes(toolId) 
-        ? prev.filter(id => id !== toolId)
-        : [...prev, toolId]
-    )
-  }
-
-  function toggleSkill(skillId: string) {
-    setSelectedSkills(prev => 
-      prev.includes(skillId) 
-        ? prev.filter(id => id !== skillId)
-        : [...prev, skillId]
-    )
-  }
-
   async function setAsDefault(agentId: string, e: React.MouseEvent) {
+    e.preventDefault()
     e.stopPropagation()
     if (!supabase) return
     
@@ -203,77 +95,6 @@ export default function AgentsPage() {
       await fetchData()
     } catch (error) {
       console.error("Failed to set default agent:", error)
-    }
-  }
-
-  async function handleSave() {
-    if (!supabase) return
-
-    setSaving(true)
-    try {
-      const parsedTemp = parseFloat(formData.temperature)
-      const parsedTokens = parseInt(formData.max_tokens)
-      
-      const parsedBudget = parseInt(formData.daily_token_budget)
-
-      const payload = {
-        name: formData.name,
-        slug: formData.slug || generateSlug(formData.name),
-        description: formData.description || null,
-        system_prompt: formData.system_prompt,
-        model: formData.model || null,
-        provider_id: formData.provider_id || null,
-        temperature: !isNaN(parsedTemp) ? parsedTemp : 0.7,
-        max_tokens: !isNaN(parsedTokens) ? parsedTokens : 4096,
-        is_active: true,
-        is_default: formData.is_default,
-        role: formData.role || null,
-        memory_mode: formData.memory_mode || null,
-        daily_token_budget: !isNaN(parsedBudget) ? parsedBudget : null,
-      }
-
-      let agentId: string
-
-      if (editingAgent) {
-        const { error } = await supabase
-          .from("agents")
-          .update(payload)
-          .eq("id", editingAgent.id)
-        if (error) throw error
-        agentId = editingAgent.id
-      } else {
-        const { data, error } = await supabase
-          .from("agents")
-          .insert(payload)
-          .select()
-          .single()
-        if (error) throw error
-        agentId = data.id
-      }
-
-      if (editingAgent) {
-        await supabase.from("agent_tools").delete().eq("agent_id", agentId)
-        await supabase.from("agent_skills").delete().eq("agent_id", agentId)
-      }
-
-      if (selectedTools.length > 0) {
-        await supabase.from("agent_tools").insert(
-          selectedTools.map(tool_id => ({ agent_id: agentId, tool_id }))
-        )
-      }
-
-      if (selectedSkills.length > 0) {
-        await supabase.from("agent_skills").insert(
-          selectedSkills.map(skill_id => ({ agent_id: agentId, skill_id }))
-        )
-      }
-
-      await fetchData()
-      setDialogOpen(false)
-    } catch (error) {
-      console.error("Failed to save agent:", error)
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -308,9 +129,11 @@ export default function AgentsPage() {
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Agents</h1>
           <p className="text-muted-foreground">Configure and manage AI agents</p>
         </div>
-        <Button size="sm" onClick={openCreateDialog} data-testid="button-create-agent">
-          <Plus className="h-4 w-4" />
-          New Agent
+        <Button size="sm" asChild data-testid="button-create-agent">
+          <Link href="/agents/new">
+            <Plus className="h-4 w-4" />
+            New Agent
+          </Link>
         </Button>
       </div>
 
@@ -361,9 +184,11 @@ export default function AgentsPage() {
                 {hideInactive && agents.length > 0 ? "All agents are inactive" : "No agents configured yet"}
               </p>
               {agents.length === 0 && (
-                <Button className="mt-4" onClick={openCreateDialog} data-testid="button-create-first-agent">
-                  <Plus className="h-4 w-4" />
-                  Create Your First Agent
+                <Button className="mt-4" asChild data-testid="button-create-first-agent">
+                  <Link href="/agents/new">
+                    <Plus className="h-4 w-4" />
+                    Create Your First Agent
+                  </Link>
                 </Button>
               )}
             </CardContent>
@@ -373,7 +198,8 @@ export default function AgentsPage() {
             <TabsContent value="cards">
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {filteredAgents.map((agent) => (
-                    <Card key={agent.id} className={`hover:bg-accent/50 transition-colors cursor-pointer ${agent.is_default ? 'ring-2 ring-primary' : ''}`} onClick={() => openEditDialog(agent)}>
+                    <Link key={agent.id} href={`/agents/${agent.id}`}>
+                    <Card className={`hover:bg-accent/50 transition-colors cursor-pointer h-full ${agent.is_default ? 'ring-2 ring-primary' : ''}`}>
                       <CardHeader className="pb-2">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-center gap-2">
@@ -389,7 +215,7 @@ export default function AgentsPage() {
                                 Default
                               </Badge>
                             )}
-                            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
                               <Switch
                                 checked={agent.is_active ?? false}
                                 onCheckedChange={() => toggleAgentActive(agent.id, agent.is_active ?? false, agent.is_default ?? false)}
@@ -439,7 +265,7 @@ export default function AgentsPage() {
                             <Button 
                               variant="ghost" 
                               size="sm" 
-                              onClick={(e) => setAsDefault(agent.id, e)}
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setAsDefault(agent.id, e); }}
                               data-testid={`button-set-default-${agent.id}`}
                             >
                               <Star className="h-4 w-4" />
@@ -489,6 +315,7 @@ export default function AgentsPage() {
                         )}
                       </CardContent>
                     </Card>
+                    </Link>
                   )
                 )}
               </div>
@@ -501,7 +328,7 @@ export default function AgentsPage() {
                 skills={skills}
                 agentTools={agentTools}
                 agentSkills={agentSkills}
-                onEdit={openEditDialog}
+                onEdit={(agent) => router.push(`/agents/${agent.id}`)}
                 onSetDefault={setAsDefault}
                 onToggleActive={toggleAgentActive}
               />
@@ -509,297 +336,6 @@ export default function AgentsPage() {
           </>
         )}
       </Tabs>
-
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{editingAgent ? "Edit Agent" : "Create New Agent"}</DialogTitle>
-            <DialogDescription>
-              {editingAgent ? "Update the agent configuration" : "Configure a new AI agent for task orchestration"}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Name *</Label>
-                <Input
-                  id="name"
-                  value={formData.name}
-                  onChange={(e) => {
-                    setFormData({ 
-                      ...formData, 
-                      name: e.target.value,
-                      slug: editingAgent ? formData.slug : generateSlug(e.target.value)
-                    })
-                  }}
-                  placeholder="My Agent"
-                  data-testid="input-agent-name"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="slug">Slug *</Label>
-                <Input
-                  id="slug"
-                  value={formData.slug}
-                  onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
-                  placeholder="my-agent"
-                  data-testid="input-agent-slug"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="description">Description</Label>
-              <Input
-                id="description"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="What does this agent do?"
-                data-testid="input-agent-description"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="system_prompt">System Prompt *</Label>
-              <textarea
-                id="system_prompt"
-                value={formData.system_prompt}
-                onChange={(e) => setFormData({ ...formData, system_prompt: e.target.value })}
-                placeholder="You are a helpful AI assistant..."
-                className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                data-testid="input-agent-prompt"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="provider">LLM Provider</Label>
-                <Select 
-                  value={formData.provider_id} 
-                  onValueChange={(v) => {
-                    // Check if current model is available for new provider
-                    const newProviderModels = providerModels.filter(m => m.provider_id === v)
-                    const modelAvailable = newProviderModels.some(m => m.model_name === formData.model)
-                    const defaultModel = providers.find(p => p.id === v)?.default_model || ""
-                    setFormData({ 
-                      ...formData, 
-                      provider_id: v,
-                      model: modelAvailable ? formData.model : defaultModel
-                    })
-                  }}
-                >
-                  <SelectTrigger data-testid="select-provider">
-                    <SelectValue placeholder="Select provider" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {providers.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>{p.display_name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="model">Model</Label>
-                <Select 
-                  value={formData.model} 
-                  onValueChange={(v) => setFormData({ ...formData, model: v })}
-                  disabled={!formData.provider_id}
-                >
-                  <SelectTrigger data-testid="select-agent-model">
-                    <SelectValue placeholder={formData.provider_id ? "Select model" : "Select provider first"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {providerModels
-                      .filter(m => m.provider_id === formData.provider_id)
-                      .sort((a, b) => (b.is_latest ? 1 : 0) - (a.is_latest ? 1 : 0))
-                      .map((model) => (
-                        <SelectItem key={model.id} value={model.model_name}>
-                          <div className="flex items-center gap-2">
-                            <span>{model.display_name || model.model_name}</span>
-                            {model.is_latest && (
-                              <span className="text-[10px] px-1 py-0 rounded bg-green-500/10 text-green-600">Latest</span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-                {formData.model && (() => {
-                  const m = providerModels.find(pm => pm.model_name === formData.model)
-                  return m ? (
-                    <p className="text-xs text-muted-foreground">
-                      {m.context_window && `${(m.context_window / 1000).toLocaleString()}K context`}
-                      {m.input_price_per_million != null && ` • $${m.input_price_per_million}/$${m.output_price_per_million} per M tokens`}
-                    </p>
-                  ) : null
-                })()}
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="temperature">Temperature</Label>
-                <Input
-                  id="temperature"
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  max="2"
-                  value={formData.temperature}
-                  onChange={(e) => setFormData({ ...formData, temperature: e.target.value })}
-                  data-testid="input-agent-temperature"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="max_tokens">Max Tokens</Label>
-                <Input
-                  id="max_tokens"
-                  type="text"
-                  value={(() => {
-                    const num = parseInt(formData.max_tokens.replace(/,/g, ""))
-                    return isNaN(num) ? "" : num.toLocaleString()
-                  })()}
-                  onChange={(e) => setFormData({ ...formData, max_tokens: e.target.value.replace(/[^0-9]/g, "") })}
-                  data-testid="input-agent-max-tokens"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between p-3 rounded-md border">
-              <div className="space-y-0.5">
-                <Label htmlFor="is_default" className="text-sm font-medium cursor-pointer">Default Agent</Label>
-                <p className="text-xs text-muted-foreground">Use this agent for new tasks by default</p>
-              </div>
-              <Switch
-                id="is_default"
-                checked={formData.is_default}
-                onCheckedChange={(checked) => setFormData({ ...formData, is_default: checked })}
-                data-testid="switch-default-agent"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="role">Role</Label>
-                <Select
-                  value={formData.role}
-                  onValueChange={(v) => setFormData({ ...formData, role: v })}
-                >
-                  <SelectTrigger data-testid="select-agent-role">
-                    <SelectValue placeholder="Select role" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="worker">Worker</SelectItem>
-                    <SelectItem value="supervisor">Supervisor</SelectItem>
-                    <SelectItem value="specialist">Specialist</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="memory_mode">Memory Mode</Label>
-                <Select
-                  value={formData.memory_mode}
-                  onValueChange={(v) => setFormData({ ...formData, memory_mode: v })}
-                >
-                  <SelectTrigger data-testid="select-agent-memory-mode">
-                    <SelectValue placeholder="Select memory mode" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
-                    <SelectItem value="session">Session</SelectItem>
-                    <SelectItem value="persistent">Persistent</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="daily_token_budget">Daily Token Budget</Label>
-              <Input
-                id="daily_token_budget"
-                type="number"
-                value={formData.daily_token_budget}
-                onChange={(e) => setFormData({ ...formData, daily_token_budget: e.target.value })}
-                placeholder="e.g. 100000"
-                data-testid="input-agent-daily-token-budget"
-              />
-            </div>
-
-            <Accordion type="multiple" className="w-full">
-              <AccordionItem value="skills">
-                <AccordionTrigger className="text-sm">
-                  <div className="flex items-center gap-2">
-                    <Zap className="h-4 w-4 text-amber-500" />
-                    Skills ({selectedSkills.length} selected)
-                  </div>
-                </AccordionTrigger>
-                <AccordionContent>
-                  {skills.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No skills available. Create skills first.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {skills.map((skill) => (
-                        <div key={skill.id} className="flex items-center gap-2">
-                          <Checkbox
-                            id={`skill-${skill.id}`}
-                            checked={selectedSkills.includes(skill.id)}
-                            onCheckedChange={() => toggleSkill(skill.id)}
-                            data-testid={`checkbox-skill-${skill.id}`}
-                          />
-                          <label htmlFor={`skill-${skill.id}`} className="text-sm cursor-pointer flex-1">
-                            {skill.name}
-                            {skill.description && (
-                              <span className="text-muted-foreground ml-1">- {skill.description}</span>
-                            )}
-                          </label>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </AccordionContent>
-              </AccordionItem>
-
-              <AccordionItem value="tools">
-                <AccordionTrigger className="text-sm">
-                  <div className="flex items-center gap-2">
-                    <Wrench className="h-4 w-4 text-blue-500" />
-                    Tools ({selectedTools.length} selected)
-                  </div>
-                </AccordionTrigger>
-                <AccordionContent>
-                  {tools.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No tools available. Create tools first.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {tools.map((tool) => (
-                        <div key={tool.id} className="flex items-center gap-2">
-                          <Checkbox
-                            id={`tool-${tool.id}`}
-                            checked={selectedTools.includes(tool.id)}
-                            onCheckedChange={() => toggleTool(tool.id)}
-                            data-testid={`checkbox-tool-${tool.id}`}
-                          />
-                          <label htmlFor={`tool-${tool.id}`} className="text-sm cursor-pointer flex-1">
-                            {tool.name}
-                            {tool.description && (
-                              <span className="text-muted-foreground ml-1">- {tool.description}</span>
-                            )}
-                          </label>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </AccordionContent>
-              </AccordionItem>
-            </Accordion>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="button-cancel">
-              Cancel
-            </Button>
-            <Button onClick={handleSave} disabled={saving || !formData.name || !formData.system_prompt} data-testid="button-save">
-              <Save className="h-4 w-4" />
-              {saving ? "Saving..." : editingAgent ? "Update Agent" : "Create Agent"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

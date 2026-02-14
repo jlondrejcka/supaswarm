@@ -57,9 +57,9 @@ function buildHierarchy(agents: Agent[], tools: Tool[], agentTools: Record<strin
     if (!agent || visited.has(agentId)) return null
     visited.add(agentId)
 
-    const kids = childrenMap.get(agentId) || new Set()
+    const kids = childrenMap.get(agentId) || new Set<string>()
     const children: AgentNode[] = []
-    for (const childId of kids) {
+    for (const childId of Array.from(kids)) {
       const node = buildNode(childId)
       if (node) children.push(node)
     }

@@ -1,5 +1,15 @@
 import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
+export interface TokenUsageRecord {
+  input: number;
+  output: number;
+}
+
+export interface TurnAttribution {
+  tool_calls?: string[];
+  skill_loads?: Array<{ skill_id: string; skill_name?: string }>;
+}
+
 export type MessageType = 
   | "user_message"
   | "assistant_message"
@@ -46,11 +56,18 @@ export function createTaskLogger(
     content: string,
     metadata?: Record<string, unknown>,
     updateTaskStatus?: { status: string; output?: Record<string, unknown> },
+    options?: { tokenUsage?: TokenUsageRecord; attribution?: TurnAttribution },
   ): Promise<void> {
     const timestamp = new Date().toISOString();
     const elapsedMs = Date.now() - startTime;
     const enrichedMetadata = {
       ...metadata,
+      ...(options?.attribution?.tool_calls?.length
+        ? { tool_calls: options.attribution.tool_calls }
+        : {}),
+      ...(options?.attribution?.skill_loads?.length
+        ? { skill_loads: options.attribution.skill_loads }
+        : {}),
       timestamp,
       elapsed_ms: elapsedMs,
       sequence: sequenceNumber,
@@ -60,17 +77,28 @@ export function createTaskLogger(
     console.log(`[TASK] [${messageType.toUpperCase()}]`, {
       content: content.substring(0, 200),
       ...enrichedMetadata,
+      ...(options?.tokenUsage ? { tokens: options.tokenUsage } : {}),
     });
 
-    // Save to task_messages
-    const { error: messageError } = await supabase.from("task_messages").insert({
+    const insertPayload: Record<string, unknown> = {
       task_id: taskId,
       type: messageType,
       role: getRole(messageType),
       content: { text: content },
       metadata: enrichedMetadata,
       sequence_number: sequenceNumber++,
-    });
+    };
+    if (options?.tokenUsage) {
+      insertPayload.token_usage = {
+        input: options.tokenUsage.input,
+        output: options.tokenUsage.output,
+      };
+    }
+
+    // Save to task_messages
+    const { error: messageError } = await supabase
+      .from("task_messages")
+      .insert(insertPayload);
 
     if (messageError) {
       console.error("[TASK] Failed to save message:", messageError);
@@ -106,16 +134,17 @@ export function createTaskLogger(
   }
 
   /**
-   * Log assistant response
+   * Log assistant response (use tokenUsage for final turn)
    */
   async function logAssistantMessage(
     message: string,
     metadata?: Record<string, unknown>,
+    options?: { tokenUsage?: TokenUsageRecord; attribution?: TurnAttribution },
   ): Promise<void> {
     await log("assistant_message", message, {
       ...metadata,
       response_length: message.length,
-    });
+    }, undefined, options);
   }
 
   /**
@@ -171,13 +200,14 @@ export function createTaskLogger(
   }
 
   /**
-   * Log thinking/status
+   * Log thinking/status (use for LLM turns with optional token usage + attribution)
    */
   async function logThinking(
     content: string,
     metadata?: Record<string, unknown>,
+    options?: { tokenUsage?: TokenUsageRecord; attribution?: TurnAttribution },
   ): Promise<void> {
-    await log("thinking", content, metadata);
+    await log("thinking", content, metadata, undefined, options);
   }
 
   /**
