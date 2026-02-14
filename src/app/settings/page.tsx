@@ -431,19 +431,12 @@ export default function SettingsPage() {
                               {provider.display_name}
                             </span>
                             <Badge 
-                              variant={provider.is_active ? "default" : "secondary"}
+                              variant={hasVaultKey ? "default" : "secondary"}
                               className="cursor-pointer"
-                              onClick={() => toggleActive(provider)}
                               data-testid={`badge-status-${provider.id}`}
                             >
-                              {provider.is_active ? "Active" : "Inactive"}
+                              {hasVaultKey ? "Active" : "No Key"}
                             </Badge>
-                            {hasVaultKey && (
-                              <Badge variant="outline" className="gap-1 bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">
-                                <Check className="h-3 w-3" />
-                                Key in Vault
-                              </Badge>
-                            )}
                           </div>
                           <p className="text-sm text-muted-foreground">
                             Default model: {provider.default_model}
