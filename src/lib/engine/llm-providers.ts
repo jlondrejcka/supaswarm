@@ -9,7 +9,7 @@ export const VAULT_KEY_MAPPING: Record<string, string> = {
   google: "GOOGLE_AI_API_KEY",
   google_ai: "GOOGLE_AI_API_KEY",
   openai: "OPENAI_API_KEY",
-  ollama: "OLLAMA_BASE_URL", // Ollama uses base URL instead of API key
+  ollama: "OLLAMA_LOCAL", // Local Ollama base URL
 };
 
 /**
