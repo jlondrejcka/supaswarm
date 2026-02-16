@@ -82,21 +82,6 @@ BEGIN
   -- Mark spawn session completed
   UPDATE public.sessions SET status = 'completed' WHERE id = NEW.session_id;
 
-  -- Re-invoke process-task for parent via pg_net (if available)
-  BEGIN
-    PERFORM net.http_post(
-      url := current_setting('app.supabase_url', true) || '/functions/v1/process-task',
-      headers := jsonb_build_object(
-        'Content-Type', 'application/json',
-        'Authorization', 'Bearer ' || current_setting('app.service_role_key', true)
-      ),
-      body := jsonb_build_object('task_id', v_parent_task_id)
-    );
-  EXCEPTION WHEN OTHERS THEN
-    -- pg_net may not be available; parent task will be picked up by cron
-    RAISE NOTICE 'pg_net not available for re-invocation: %', SQLERRM;
-  END;
-
   RETURN NEW;
 END;
 $$;

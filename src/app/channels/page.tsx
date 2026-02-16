@@ -67,14 +67,20 @@ const SLACK_SECRETS = [
   {
     key: "SLACK_BOT_TOKEN",
     label: "Bot Token",
-    description: "xoxb-... token from your Slack app",
+    description: "xoxb-... token from your Slack app (for responses)",
     placeholder: "xoxb-...",
   },
   {
     key: "SLACK_SIGNING_SECRET",
     label: "Signing Secret",
-    description: "From Slack app Basic Information page",
+    description: "From Slack app Basic Information page (for webhook verification)",
     placeholder: "Enter signing secret",
+  },
+  {
+    key: "SLACK_APP_TOKEN",
+    label: "App Token",
+    description: "xapp-... token for Socket Mode (enables WebSocket connections)",
+    placeholder: "xapp-...",
   },
 ]
 
@@ -104,6 +110,7 @@ export default function ChannelsPage() {
     slack_app_id: "",
     bot_token: "",
     signing_secret: "",
+    app_token: "",
   })
   const [savingBot, setSavingBot] = useState(false)
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null)
@@ -274,7 +281,7 @@ export default function ChannelsPage() {
   // ============================================================================
 
   function openAddBotDialog() {
-    setBotForm({ agent_id: "", slack_app_id: "", bot_token: "", signing_secret: "" })
+    setBotForm({ agent_id: "", slack_app_id: "", bot_token: "", signing_secret: "", app_token: "" })
     setEditingAgentId(null)
     setBotDialogOpen(true)
   }
@@ -285,6 +292,7 @@ export default function ChannelsPage() {
       slack_app_id: agent.slack_app_id || "",
       bot_token: "",
       signing_secret: "",
+      app_token: "",
     })
     setEditingAgentId(agent.id)
     setBotDialogOpen(true)
@@ -301,6 +309,7 @@ export default function ChannelsPage() {
       const slugUpper = agent.slug.toUpperCase().replace(/-/g, "_")
       const tokenSecretName = `SLACK_BOT_TOKEN_${slugUpper}`
       const signingSecretName = `SLACK_SIGNING_SECRET_${slugUpper}`
+      const appTokenSecretName = `SLACK_APP_TOKEN_${slugUpper}`
 
       // Save tokens to vault if provided
       if (botForm.bot_token.trim()) {
@@ -323,6 +332,18 @@ export default function ChannelsPage() {
             secret_name: signingSecretName,
             secret_value: botForm.signing_secret.trim(),
             secret_description: `Slack signing secret for ${agent.name}`,
+          }),
+        })
+      }
+
+      if (botForm.app_token.trim()) {
+        await fetch("/api/vault", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            secret_name: appTokenSecretName,
+            secret_value: botForm.app_token.trim(),
+            secret_description: `Slack app token (Socket Mode) for ${agent.name}`,
           }),
         })
       }
@@ -379,7 +400,7 @@ export default function ChannelsPage() {
     ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/slack-events`
     : ""
 
-  const globalReady = hasSecret("SLACK_BOT_TOKEN") && hasSecret("SLACK_SIGNING_SECRET")
+  const globalReady = hasSecret("SLACK_BOT_TOKEN") && hasSecret("SLACK_SIGNING_SECRET") && hasSecret("SLACK_APP_TOKEN")
   const slackAgents = agents.filter((a) => a.slack_app_id)
   const availableAgents = agents.filter((a) => !a.slack_app_id)
 
@@ -412,6 +433,14 @@ export default function ChannelsPage() {
         </div>
       </div>
 
+      {/* Socket Mode Connection Status */}
+      <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+        <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+        <p className="text-sm text-blue-700 dark:text-blue-400">
+          Socket Mode: Connected apps will establish WebSocket connections to Slack (no public URL needed)
+        </p>
+      </div>
+
       {/* ================================================================ */}
       {/* Global Slack Config */}
       {/* ================================================================ */}
@@ -424,7 +453,7 @@ export default function ChannelsPage() {
                 Slack Integration
               </CardTitle>
               <CardDescription>
-                Configure Slack Events API connection
+                Configure Slack Socket Mode connection (no public URL required)
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
@@ -449,36 +478,6 @@ export default function ChannelsPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Webhook URL */}
-          <div className="space-y-1">
-            <Label className="text-xs flex items-center gap-1">
-              <Link className="h-3 w-3" />
-              Webhook URL
-            </Label>
-            <div className="flex gap-2">
-              <Input
-                readOnly
-                value={webhookUrl}
-                className="h-8 text-sm font-mono bg-muted"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 shrink-0"
-                onClick={() => {
-                  navigator.clipboard.writeText(webhookUrl)
-                  setCopied(true)
-                  setTimeout(() => setCopied(false), 2000)
-                }}
-              >
-                {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-              </Button>
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              Paste this into your Slack app&apos;s Event Subscriptions URL. All Slack apps share this endpoint.
-            </p>
-          </div>
-
           {/* Global secrets */}
           {vaultLoading ? (
             <div className="space-y-2">
@@ -771,6 +770,25 @@ export default function ChannelsPage() {
                   Stored as <code className="bg-muted px-1 rounded">
                     SLACK_SIGNING_SECRET_{(agents.find((a) => a.id === botForm.agent_id)?.slug || "").toUpperCase().replace(/-/g, "_")}
                   </code>
+                </p>
+              )}
+            </div>
+
+            {/* App Token (for Socket Mode) */}
+            <div className="space-y-1">
+              <Label className="text-xs">App Token (Socket Mode)</Label>
+              <Input
+                type="password"
+                value={botForm.app_token}
+                onChange={(e) => setBotForm((f) => ({ ...f, app_token: e.target.value }))}
+                placeholder="xapp-... (optional, falls back to global)"
+                className="h-8 text-sm"
+              />
+              {botForm.agent_id && (
+                <p className="text-[10px] text-muted-foreground">
+                  Stored as <code className="bg-muted px-1 rounded">
+                    SLACK_APP_TOKEN_{(agents.find((a) => a.id === botForm.agent_id)?.slug || "").toUpperCase().replace(/-/g, "_")}
+                  </code> — leave empty to use global app token
                 </p>
               )}
             </div>

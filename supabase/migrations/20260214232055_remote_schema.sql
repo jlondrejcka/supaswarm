@@ -351,6 +351,8 @@ END;
 $function$
 ;
 
+-- DEPRECATED: util.invoke_edge_function uses pg_net which is being phased out.
+-- Use pgmq.send() to queue tasks instead. The embedded worker will process queued messages.
 CREATE OR REPLACE FUNCTION util.invoke_edge_function(function_name text, body jsonb, timeout_milliseconds integer DEFAULT 300000)
  RETURNS void
  LANGUAGE plpgsql
@@ -390,6 +392,8 @@ END;
 $function$
 ;
 
+-- DEPRECATED: util.process_task_queue is being phased out as it uses pg_net indirectly.
+-- The embedded worker now reads directly from 'task_processing' queue and processes tasks.
 CREATE OR REPLACE FUNCTION util.process_task_queue(batch_size integer DEFAULT 10, timeout_milliseconds integer DEFAULT 300000)
  RETURNS void
  LANGUAGE plpgsql

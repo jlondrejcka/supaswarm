@@ -64,6 +64,18 @@ BEGIN
           ELSE status
         END
       WHERE id = NEW.task_id;
+
+      -- Queue for processing if task went back to pending
+      IF EXISTS (SELECT 1 FROM public.tasks WHERE id = NEW.task_id AND status = 'pending') THEN
+        PERFORM pgmq.send(
+          queue_name => 'task_processing',
+          msg => jsonb_build_object(
+            'task_id', NEW.task_id,
+            'agent_id', (SELECT agent_id FROM public.tasks WHERE id = NEW.task_id),
+            'agent_slug', (SELECT agent_slug FROM public.tasks WHERE id = NEW.task_id)
+          )
+        );
+      END IF;
     END IF;
 
     -- Notify the agent
@@ -120,19 +132,15 @@ BEGIN
   -- Auto-invoke process-task if task went back to pending
   IF v_task_id IS NOT NULL THEN
     IF EXISTS (SELECT 1 FROM public.tasks WHERE id = v_task_id AND status = 'pending') THEN
-      SELECT decrypted_secret INTO v_service_key
-      FROM vault.decrypted_secrets WHERE name = 'SUPABASE_SERVICE_ROLE_KEY' LIMIT 1;
-
-      IF v_service_key IS NOT NULL THEN
-        PERFORM net.http_post(
-          url := 'https://bgqxccmdcpegvbuxmnrf.supabase.co/functions/v1/process-task',
-          headers := jsonb_build_object(
-            'Content-Type', 'application/json',
-            'Authorization', 'Bearer ' || v_service_key
-          ),
-          body := jsonb_build_object('task_id', v_task_id)
-        );
-      END IF;
+      -- Queue for processing - embedded worker will handle it
+      PERFORM pgmq.send(
+        queue_name => 'task_processing',
+        msg => jsonb_build_object(
+          'task_id', v_task_id,
+          'agent_id', (SELECT agent_id FROM public.tasks WHERE id = v_task_id),
+          'agent_slug', (SELECT agent_slug FROM public.tasks WHERE id = v_task_id)
+        )
+      );
     END IF;
   END IF;
 

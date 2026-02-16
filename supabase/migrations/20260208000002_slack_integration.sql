@@ -105,23 +105,17 @@ BEGIN
 
   NEW.slack_notify := TRUE;
 
-  SELECT value INTO v_url FROM public.app_config WHERE key = 'supabase_url';
-
-  IF v_url IS NULL THEN
-    RAISE NOTICE 'slack-reply: app_config missing supabase_url';
-    RETURN NEW;
-  END IF;
-
+  -- Queue message for Slack reply processing instead of calling edge function via pg_net
   BEGIN
-    PERFORM net.http_post(
-      url := v_url || '/functions/v1/slack-reply',
-      headers := jsonb_build_object(
-        'Content-Type', 'application/json'
-      ),
-      body := jsonb_build_object('task_message_id', NEW.id)
+    PERFORM pgmq.send(
+      queue_name => 'slack_replies',
+      msg => jsonb_build_object(
+        'task_message_id', NEW.id,
+        'message_id', NEW.id
+      )
     );
   EXCEPTION WHEN OTHERS THEN
-    RAISE NOTICE 'slack-reply pg_net call failed: %', SQLERRM;
+    RAISE NOTICE 'slack-reply queue failed: %', SQLERRM;
   END;
 
   RETURN NEW;

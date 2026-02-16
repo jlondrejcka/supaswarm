@@ -9,6 +9,7 @@ export const VAULT_KEY_MAPPING: Record<string, string> = {
   google: "GOOGLE_AI_API_KEY",
   google_ai: "GOOGLE_AI_API_KEY",
   openai: "OPENAI_API_KEY",
+  ollama: "", // Ollama doesn't require API key
 };
 
 /**
@@ -19,7 +20,7 @@ export function getVaultKeyName(providerName: string): string {
 }
 
 /**
- * Call OpenAI-compatible API (OpenAI, XAI)
+ * Call OpenAI-compatible API (OpenAI, XAI, Ollama)
  */
 async function callOpenAI(
   baseUrl: string,
@@ -35,12 +36,18 @@ async function callOpenAI(
     tool_count: tools?.length || 0,
   });
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  // Only add Authorization header if API key is provided (not for Ollama)
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       model,
       messages,
@@ -103,7 +110,7 @@ export async function callLLM(
     current_message_length: userMessage.length,
   });
 
-  if (provider.name === "openai" || provider.name === "xai") {
+  if (provider.name === "openai" || provider.name === "xai" || provider.name === "ollama") {
     const baseUrl = provider.base_url || "https://api.openai.com/v1";
     const messages: LLMMessage[] = [];
     
@@ -293,7 +300,7 @@ export async function synthesizeResponse(
     tool_count: toolCalls.length,
   });
 
-  if (provider.name === "openai" || provider.name === "xai") {
+  if (provider.name === "openai" || provider.name === "xai" || provider.name === "ollama") {
     const baseUrl = provider.base_url || "https://api.openai.com/v1";
     const messages: LLMMessage[] = [];
 
