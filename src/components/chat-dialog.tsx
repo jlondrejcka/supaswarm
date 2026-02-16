@@ -452,17 +452,19 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
 
       // Only invoke if task is still pending
       if (taskCheck && (taskCheck.status === "pending" || taskCheck.status === "pending_subtask")) {
-        // Invoke the Edge Function to process the task
+        // Invoke local task processing endpoint (replaces remote edge function)
         try {
-          const { error: invokeError } = await supabase.functions.invoke('process-task', {
-            body: { task_id: task.id },
+          const res = await fetch('/api/process-task', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_id: task.id }),
           })
           
-          if (invokeError) {
-            console.error('Edge function error:', invokeError)
+          if (!res.ok) {
+            console.error('Process task error:', await res.text())
           }
-        } catch (edgeFnError) {
-          console.error('Failed to invoke edge function:', edgeFnError)
+        } catch (processError) {
+          console.error('Failed to process task:', processError)
         }
       } else {
         console.log('Task already processed, skipping edge function invocation', {

@@ -81,19 +81,16 @@ export async function POST(
         status: "success",
       });
 
-    // Invoke process-task
+    // Process task locally
+    const { processTask } = await import("@/lib/engine/process-task");
     try {
-      await fetch(`${supabaseUrl}/functions/v1/process-task`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${supabaseServiceKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ task_id: task.id }),
-      });
+      processTask(task.id, supabaseUrl, supabaseServiceKey)
+        .then((result) => {
+          if (!result.success) console.error("Job task failed:", result.error);
+        })
+        .catch((err) => console.error("Job task error:", err));
     } catch (invokeErr) {
       console.error("Failed to invoke process-task:", invokeErr);
-      // Don't fail the request if task invocation fails
     }
 
     return NextResponse.json({

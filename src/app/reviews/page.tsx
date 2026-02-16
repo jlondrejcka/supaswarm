@@ -116,9 +116,11 @@ export default function ReviewsPage() {
         return
       }
       
-      // Trigger task processing
-      await supabase.functions.invoke("process-task", {
-        body: { task_id: taskId }
+      // Trigger local task processing
+      await fetch('/api/process-task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId }),
       })
       
       await fetchData()
