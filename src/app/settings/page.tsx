@@ -173,20 +173,25 @@ export default function SettingsPage() {
     try {
       const envVarName = ENV_VAR_NAMES[selectedProvider.name] || `${selectedProvider.name.toUpperCase()}_API_KEY`
       
-      if (formData.api_key.trim()) {
-        const vaultRes = await fetch("/api/vault", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ secret_name: envVarName, secret_value: formData.api_key.trim() }),
-        })
-        if (!vaultRes.ok) throw new Error(await vaultRes.text())
+      // Always save the key for ollama, or if it's provided and required
+      if (formData.api_key.trim() || selectedProvider.name === "ollama") {
+        const keyValue = formData.api_key.trim() || (selectedProvider.name === "ollama" ? "ollama-local" : "");
         
-        await supabase
-          .from("llm_providers")
-          .update({ has_api_key: true })
-          .eq("id", selectedProvider.id)
+        if (keyValue) {
+          const vaultRes = await fetch("/api/vault", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ secret_name: envVarName, secret_value: keyValue }),
+          })
+          if (!vaultRes.ok) throw new Error(await vaultRes.text())
           
-        setStatusMessage({ type: "success", text: `${envVarName} saved to Vault` })
+          await supabase
+            .from("llm_providers")
+            .update({ has_api_key: true })
+            .eq("id", selectedProvider.id)
+            
+          setStatusMessage({ type: "success", text: `${envVarName} saved to Vault` })
+        }
       }
 
       const { error } = await supabase
