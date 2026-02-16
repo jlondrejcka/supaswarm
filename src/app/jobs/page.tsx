@@ -10,7 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Play, Pause, Trash2, Clock, CheckCircle, XCircle, StopCircle, ExternalLink } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Plus, Play, Pause, Trash2, Clock, CheckCircle, XCircle, StopCircle, ExternalLink, History, MessageSquare } from "lucide-react";
 
 type Agent = {
   id: string;
@@ -40,12 +41,23 @@ type JobTask = {
   status: string;
   created_at: string | null;
   session_id: string | null;
+  context: Record<string, any> | null;
+};
+
+type JobRun = {
+  id: string;
+  job_id: string;
+  task_id: string | null;
+  started_at: string;
+  status: string;
+  error_message: string | null;
 };
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [jobTasks, setJobTasks] = useState<Record<string, JobTask[]>>({});
+  const [jobRuns, setJobRuns] = useState<Record<string, JobRun[]>>({});
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -65,16 +77,17 @@ export default function JobsPage() {
     fetchAgents();
   }, []); // Run once on mount
 
-  // Separate effect for auto-refreshing active tasks
+  // Separate effect for auto-refreshing active tasks and recent runs
   useEffect(() => {
     if (jobs.length === 0) return;
     
     const interval = setInterval(() => {
       fetchActiveTasks();
+      fetchRecentRuns(jobs);
     }, 5000);
     
     return () => clearInterval(interval);
-  }, [jobs.length]); // Only re-create interval when jobs count changes
+  }, [jobs]); // Re-create when jobs change
 
   async function fetchJobs() {
     if (!supabase) return;
@@ -88,12 +101,44 @@ export default function JobsPage() {
       console.error("Error fetching jobs:", error);
     } else {
       setJobs((data || []) as unknown as ScheduledJob[]);
-      // Fetch active tasks with the fresh data
+      // Fetch active tasks and recent runs with the fresh data
       if (data && data.length > 0) {
         fetchActiveTasksForJobs((data || []) as unknown as ScheduledJob[]);
+        fetchRecentRuns((data || []) as unknown as ScheduledJob[]);
       }
     }
     setLoading(false);
+  }
+
+  async function fetchRecentRuns(jobsList: ScheduledJob[]) {
+    if (!supabase || jobsList.length === 0) return;
+
+    const jobIds = jobsList.map(j => j.id);
+    
+    const { data: runs, error } = await supabase
+      .from("scheduled_job_runs" as any)
+      .select("*")
+      .in("job_id", jobIds)
+      .order("started_at", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error("Error fetching job runs:", error);
+      return;
+    }
+
+    // Group runs by job_id
+    const runsByJob: Record<string, JobRun[]> = {};
+    if (runs) {
+      for (const run of runs) {
+        if (!runsByJob[run.job_id]) {
+          runsByJob[run.job_id] = [];
+        }
+        runsByJob[run.job_id].push(run as JobRun);
+      }
+    }
+
+    setJobRuns(runsByJob);
   }
 
   async function fetchActiveTasks() {
@@ -105,12 +150,11 @@ export default function JobsPage() {
 
     const jobIds = jobsList.map(j => j.id);
     
-    // Get active sessions for these jobs
+    // Get active sessions for these jobs (both cron and slack types)
     const { data: sessions, error: sessionsError } = await supabase
       .from("sessions")
-      .select("id, channel_id")
-      .eq("channel_type", "cron")
-      .in("channel_id", jobIds)
+      .select("id, channel_id, channel_type, context")
+      .in("channel_type", ["cron", "slack"])
       .in("status", ["active", "idle"]);
 
     if (sessionsError || !sessions || sessions.length === 0) {
@@ -137,11 +181,23 @@ export default function JobsPage() {
     if (tasks) {
       for (const task of tasks) {
         const session = sessions.find(s => s.id === task.session_id);
-        if (session && session.channel_id) {
-          if (!tasksByJob[session.channel_id]) {
-            tasksByJob[session.channel_id] = [];
+        if (!session) continue;
+
+        // For cron sessions, use channel_id directly
+        // For slack sessions, look for _scheduled_job_id in task context
+        let jobId: string | null = null;
+        if (session.channel_type === "cron") {
+          jobId = session.channel_id;
+        } else if (session.channel_type === "slack") {
+          const taskContext = task.context as Record<string, any>;
+          jobId = taskContext?._scheduled_job_id;
+        }
+
+        if (jobId && jobIds.includes(jobId)) {
+          if (!tasksByJob[jobId]) {
+            tasksByJob[jobId] = [];
           }
-          tasksByJob[session.channel_id].push(task);
+          tasksByJob[jobId].push(task);
         }
       }
     }
@@ -243,6 +299,23 @@ export default function JobsPage() {
       console.error("Error deleting job:", error);
     } else {
       fetchJobs();
+    }
+  }
+
+  async function runJobNow(jobId: string) {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/run`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Failed to run job');
+        return;
+      }
+      console.log('[JOBS] Manual run triggered:', data);
+      fetchJobs();
+      fetchActiveTasks();
+    } catch (err) {
+      console.error('Failed to trigger job:', err);
+      alert('Failed to trigger job');
     }
   }
 
@@ -480,6 +553,12 @@ export default function JobsPage() {
                       ) : (
                         <Badge variant="secondary">Paused</Badge>
                       )}
+                      {job.task_context?.delivery_context?.channel_type === "slack" && (
+                        <Badge variant="outline" className="bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                          <MessageSquare className="h-3 w-3 mr-1" />
+                          Slack: {job.task_context.delivery_context.channel_id}
+                        </Badge>
+                      )}
                     </div>
                     {job.description && (
                       <CardDescription className="mt-1">{job.description}</CardDescription>
@@ -487,9 +566,19 @@ export default function JobsPage() {
                   </div>
                   <div className="flex gap-2">
                     <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => runJobNow(job.id)}
+                      title="Run Now"
+                    >
+                      <Play className="h-4 w-4 mr-1" />
+                      Run
+                    </Button>
+                    <Button
                       variant="ghost"
                       size="icon"
                       onClick={() => toggleJobActive(job.id, job.is_active)}
+                      title={job.is_active ? "Pause" : "Activate"}
                     >
                       {job.is_active ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                     </Button>
@@ -497,6 +586,7 @@ export default function JobsPage() {
                       variant="ghost"
                       size="icon"
                       onClick={() => deleteJob(job.id)}
+                      title="Delete"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -504,78 +594,147 @@ export default function JobsPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="grid gap-4">
-                  <div className="flex items-center gap-4 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">Schedule:</span>{" "}
-                      <span className="font-medium">{getIntervalLabel(job.interval_type, job.interval_config)}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Next run:</span>{" "}
-                      <span className="font-medium">{formatNextRun(job.next_run_at)}</span>
-                    </div>
-                  </div>
-                  <div className="text-sm">
-                    <span className="text-muted-foreground">Task:</span>{" "}
-                    <span className="font-mono text-xs bg-muted px-2 py-1 rounded">{job.task_message}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                      <div className="flex items-center gap-1">
-                        <CheckCircle className="h-4 w-4 text-green-500" />
-                        {job.total_runs} runs
+                <Tabs defaultValue="overview" className="w-full">
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="runs">
+                      <History className="h-3 w-3 mr-1" />
+                      Recent Runs ({jobRuns[job.id]?.length || 0})
+                    </TabsTrigger>
+                  </TabsList>
+                  
+                  <TabsContent value="overview" className="space-y-4">
+                    <div className="flex items-center gap-4 text-sm flex-wrap">
+                      <div>
+                        <span className="text-muted-foreground">Schedule:</span>{" "}
+                        <span className="font-medium">{getIntervalLabel(job.interval_type, job.interval_config)}</span>
                       </div>
-                      {job.failed_runs > 0 && (
+                      <div>
+                        <span className="text-muted-foreground">Next run:</span>{" "}
+                        <span className="font-medium">{formatNextRun(job.next_run_at)}</span>
+                      </div>
+                      {job.task_context?.delivery_context?.channel_type === "slack" && (
+                        <div>
+                          <span className="text-muted-foreground">Slack:</span>{" "}
+                          <span className="font-mono text-xs bg-muted px-2 py-1 rounded">
+                            {job.task_context.delivery_context.channel_id}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-muted-foreground">Task:</span>{" "}
+                      <span className="font-mono text-xs bg-muted px-2 py-1 rounded">{job.task_message}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4 text-sm">
+                        <div className="flex items-center gap-1">
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                          <span className="font-medium">{job.total_runs - job.failed_runs}</span>
+                          <span className="text-muted-foreground">success</span>
+                        </div>
                         <div className="flex items-center gap-1">
                           <XCircle className="h-4 w-4 text-red-500" />
-                          {job.failed_runs} failed
+                          <span className="font-medium">{job.failed_runs}</span>
+                          <span className="text-muted-foreground">failed</span>
+                        </div>
+                        <div className="text-muted-foreground">
+                          {job.total_runs} total
+                        </div>
+                      </div>
+                      {jobTasks[job.id] && jobTasks[job.id].length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 dark:text-yellow-400">
+                            {jobTasks[job.id].length} running
+                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => cancelRunningTasks(job.id)}
+                            className="h-7"
+                          >
+                            <StopCircle className="mr-1 h-3 w-3" />
+                            Cancel
+                          </Button>
                         </div>
                       )}
                     </div>
                     {jobTasks[job.id] && jobTasks[job.id].length > 0 && (
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 dark:text-yellow-400">
-                          {jobTasks[job.id].length} running
-                        </Badge>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => cancelRunningTasks(job.id)}
-                          className="h-7"
-                        >
-                          <StopCircle className="mr-1 h-3 w-3" />
-                          Cancel
-                        </Button>
+                      <div className="border-t pt-3 mt-2">
+                        <div className="text-xs font-medium mb-2 text-muted-foreground">Active Tasks:</div>
+                        <div className="space-y-1">
+                          {jobTasks[job.id].map((task) => (
+                            <div key={task.id} className="flex items-center gap-2 text-xs">
+                              <Badge variant="secondary" className="text-xs">
+                                {task.status}
+                              </Badge>
+                              <a
+                                href={`/tasks/${task.id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                              >
+                                {task.id.slice(0, 8)}
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                              <span className="text-muted-foreground">
+                                {task.created_at ? new Date(task.created_at).toLocaleTimeString() : "-"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
-                  </div>
-                  {jobTasks[job.id] && jobTasks[job.id].length > 0 && (
-                    <div className="border-t pt-3 mt-2">
-                      <div className="text-xs font-medium mb-2 text-muted-foreground">Active Tasks:</div>
-                      <div className="space-y-1">
-                        {jobTasks[job.id].map((task) => (
-                          <div key={task.id} className="flex items-center gap-2 text-xs">
-                            <Badge variant="secondary" className="text-xs">
-                              {task.status}
-                            </Badge>
-                            <a
-                              href={`/tasks/${task.id}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
-                            >
-                              {task.id.slice(0, 8)}
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                            <span className="text-muted-foreground">
-                              {task.created_at ? new Date(task.created_at).toLocaleTimeString() : "-"}
-                            </span>
+                  </TabsContent>
+
+                  <TabsContent value="runs" className="space-y-2">
+                    {!jobRuns[job.id] || jobRuns[job.id].length === 0 ? (
+                      <div className="text-center py-8 text-muted-foreground text-sm">
+                        No runs yet
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {jobRuns[job.id].slice(0, 10).map((run) => (
+                          <div
+                            key={run.id}
+                            className="flex items-center justify-between p-2 rounded-md border bg-card hover:bg-accent/50 transition-colors"
+                          >
+                            <div className="flex items-center gap-3">
+                              {run.status === "success" ? (
+                                <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
+                              ) : run.status === "failed" ? (
+                                <XCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
+                              ) : (
+                                <Clock className="h-4 w-4 text-yellow-500 flex-shrink-0" />
+                              )}
+                              <div className="flex flex-col gap-0.5">
+                                <div className="text-xs text-muted-foreground">
+                                  {new Date(run.started_at).toLocaleString()}
+                                </div>
+                                {run.error_message && (
+                                  <div className="text-xs text-red-500 font-mono">
+                                    {run.error_message.slice(0, 60)}...
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            {run.task_id && (
+                              <a
+                                href={`/tasks/${run.task_id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                              >
+                                View Task
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                            )}
                           </div>
                         ))}
                       </div>
-                    </div>
-                  )}
-                </div>
+                    )}
+                  </TabsContent>
+                </Tabs>
               </CardContent>
             </Card>
           ))}

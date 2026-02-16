@@ -24,33 +24,11 @@ import {
 } from "@/components/ui/select"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { SetupRequired } from "@/components/setup-required"
-import { RefreshCw, Shield, Save, Plus, Trash2, Copy, Check, AlertCircle, Link } from "lucide-react"
-import { formatDistanceToNow } from "date-fns"
+import { RefreshCw, Plus, Trash2, Check } from "lucide-react"
 
 // ============================================================================
 // Types
 // ============================================================================
-
-interface ChannelConnection {
-  id: string
-  channel_type: string
-  channel_id: string
-  display_name: string | null
-  status: string
-  config?: Record<string, unknown> | null
-  agent_id?: string | null
-  created_at: string
-  updated_at?: string
-  last_event_at?: string | null
-  message_count?: number
-  error_message?: string | null
-}
-
-interface VaultSecret {
-  secret_name: string
-  description: string
-  created_at: string
-}
 
 interface AgentRecord {
   id: string
@@ -59,58 +37,33 @@ interface AgentRecord {
   is_active: boolean
   slack_app_id: string | null
   slack_bot_token_secret: string | null
-  slack_signing_secret_name: string | null
+  slack_reply_mode: 'all_messages' | 'mentions_only' | null
 }
 
-// Required Slack secrets for global config
-const SLACK_SECRETS = [
-  {
-    key: "SLACK_BOT_TOKEN",
-    label: "Bot Token",
-    description: "xoxb-... token from your Slack app (for responses)",
-    placeholder: "xoxb-...",
-  },
-  {
-    key: "SLACK_SIGNING_SECRET",
-    label: "Signing Secret",
-    description: "From Slack app Basic Information page (for webhook verification)",
-    placeholder: "Enter signing secret",
-  },
-  {
-    key: "SLACK_APP_TOKEN",
-    label: "App Token",
-    description: "xapp-... token for Socket Mode (enables WebSocket connections)",
-    placeholder: "xapp-...",
-  },
-]
+interface VaultSecret {
+  secret_name: string
+  description: string
+  created_at: string
+}
 
 // ============================================================================
 // Component
 // ============================================================================
 
 export default function ChannelsPage() {
-  const [channels, setChannels] = useState<ChannelConnection[]>([])
-  const [loading, setLoading] = useState(true)
-
-  // Slack config state
-  const [vaultSecrets, setVaultSecrets] = useState<VaultSecret[]>([])
-  const [vaultLoading, setVaultLoading] = useState(true)
   const [agents, setAgents] = useState<AgentRecord[]>([])
-  const [secretInputs, setSecretInputs] = useState<Record<string, string>>({})
-  const [savingSecret, setSavingSecret] = useState<string | null>(null)
-  const [defaultAgentId, setDefaultAgentId] = useState<string>("")
-  const [savingDefault, setSavingDefault] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [vaultSecrets, setVaultSecrets] = useState<VaultSecret[]>([])
   const [status, setStatus] = useState("")
 
-  // Per-agent Slack bot dialog
+  // Bot dialog
   const [botDialogOpen, setBotDialogOpen] = useState(false)
   const [botForm, setBotForm] = useState({
     agent_id: "",
     slack_app_id: "",
     bot_token: "",
-    signing_secret: "",
     app_token: "",
+    reply_mode: "mentions_only" as "all_messages" | "mentions_only",
   })
   const [savingBot, setSavingBot] = useState(false)
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null)
@@ -124,48 +77,22 @@ export default function ChannelsPage() {
   }, [])
 
   async function fetchAll() {
-    await Promise.all([fetchChannels(), fetchVaultSecrets(), fetchAgents()])
+    await Promise.all([fetchAgents(), fetchVaultSecrets()])
   }
 
-  async function fetchChannels() {
+  async function fetchAgents() {
     if (!supabase) { setLoading(false); return }
     setLoading(true)
     try {
-      const { data: channelsData, error: channelsError } = await supabase
-        .from("channel_connections" as any)
-        .select("*")
-        .order("created_at", { ascending: false })
+      const { data } = await supabase
+        .from("agents")
+        .select("id, name, slug, is_active, slack_app_id, slack_bot_token_secret, slack_reply_mode")
+        .eq("is_active", true)
+        .order("name")
 
-      if (channelsError) throw channelsError
-
-      const channelsWithAgents = await Promise.all(
-        (channelsData || []).map(async (channel: any) => {
-          const { data: sessionData } = await supabase!
-            .from("sessions")
-            .select("agent_id")
-            .eq("channel_type", channel.channel_type)
-            .eq("channel_id", channel.channel_id)
-            .in("status", ["active", "idle"])
-            .order("last_activity_at", { ascending: false })
-            .limit(1)
-            .single()
-
-          return {
-            ...channel,
-            agent_id: sessionData?.agent_id || null,
-          }
-        })
-      )
-
-      // Load default agent from slack channel_connection config
-      const slackConn = (channelsData || []).find((c: any) => c.channel_type === "slack") as { config?: { default_agent_id?: string } } | undefined
-      if (slackConn?.config?.default_agent_id) {
-        setDefaultAgentId(slackConn.config.default_agent_id)
-      }
-
-      setChannels(channelsWithAgents)
-    } catch (error) {
-      console.error("Failed to fetch channels:", error)
+      setAgents((data as AgentRecord[]) || [])
+    } catch (err) {
+      console.error("Failed to fetch agents:", err)
     } finally {
       setLoading(false)
     }
@@ -180,108 +107,25 @@ export default function ChannelsPage() {
       }
     } catch (err) {
       console.error("Failed to fetch vault secrets:", err)
-    } finally {
-      setVaultLoading(false)
-    }
-  }
-
-  async function fetchAgents() {
-    if (!supabase) return
-    try {
-      const { data } = await supabase
-        .from("agents")
-        .select("id, name, slug, is_active, slack_app_id, slack_bot_token_secret, slack_signing_secret_name")
-        .eq("is_active", true)
-        .order("name")
-
-      setAgents((data as AgentRecord[]) || [])
-    } catch (err) {
-      console.error("Failed to fetch agents:", err)
     }
   }
 
   // ============================================================================
-  // Secret management
+  // Bot management
   // ============================================================================
 
   function hasSecret(name: string): boolean {
     return vaultSecrets.some((s) => s.secret_name === name)
   }
 
-  async function handleSaveGlobalConfig() {
-    setSavingSecret("all")
-    try {
-      const saves: Promise<Response>[] = []
-
-      for (const secret of SLACK_SECRETS) {
-        const value = secretInputs[secret.key]?.trim()
-        if (value) {
-          saves.push(
-            fetch("/api/vault", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                secret_name: secret.key,
-                secret_value: value,
-                secret_description: `Slack: ${secret.label}`,
-              }),
-            })
-          )
-        }
-      }
-
-      if (saves.length === 0) {
-        setSavingSecret(null)
-        return
-      }
-
-      await Promise.all(saves)
-      setSecretInputs({})
-      await fetchVaultSecrets()
-      showStatus("Slack config saved")
-    } catch (err) {
-      console.error("Failed to save secrets:", err)
-    } finally {
-      setSavingSecret(null)
-    }
-  }
-
-  // ============================================================================
-  // Default agent
-  // ============================================================================
-
-  async function handleSaveDefaultAgent(agentId: string) {
-    if (!supabase) return
-    setSavingDefault(true)
-    setDefaultAgentId(agentId)
-    try {
-      // Upsert channel_connections with default_agent_id in config
-      await supabase
-        .from("channel_connections" as any)
-        .upsert(
-          {
-            channel_type: "slack",
-            channel_id: "_global_slack_config",
-            display_name: "Slack (Global Config)",
-            status: "active",
-            config: { default_agent_id: agentId },
-          },
-          { onConflict: "channel_id" }
-        )
-      showStatus("Default agent saved")
-    } catch (err) {
-      console.error("Failed to save default agent:", err)
-    } finally {
-      setSavingDefault(false)
-    }
-  }
-
-  // ============================================================================
-  // Per-agent Slack bot
-  // ============================================================================
-
   function openAddBotDialog() {
-    setBotForm({ agent_id: "", slack_app_id: "", bot_token: "", signing_secret: "", app_token: "" })
+    setBotForm({ 
+      agent_id: "", 
+      slack_app_id: "", 
+      bot_token: "", 
+      app_token: "", 
+      reply_mode: "mentions_only" 
+    })
     setEditingAgentId(null)
     setBotDialogOpen(true)
   }
@@ -291,8 +135,8 @@ export default function ChannelsPage() {
       agent_id: agent.id,
       slack_app_id: agent.slack_app_id || "",
       bot_token: "",
-      signing_secret: "",
       app_token: "",
+      reply_mode: agent.slack_reply_mode || "mentions_only",
     })
     setEditingAgentId(agent.id)
     setBotDialogOpen(true)
@@ -308,10 +152,9 @@ export default function ChannelsPage() {
 
       const slugUpper = agent.slug.toUpperCase().replace(/-/g, "_")
       const tokenSecretName = `SLACK_BOT_TOKEN_${slugUpper}`
-      const signingSecretName = `SLACK_SIGNING_SECRET_${slugUpper}`
       const appTokenSecretName = `SLACK_APP_TOKEN_${slugUpper}`
 
-      // Save tokens to vault if provided
+      // Save bot token if provided
       if (botForm.bot_token.trim()) {
         await fetch("/api/vault", {
           method: "POST",
@@ -324,18 +167,7 @@ export default function ChannelsPage() {
         })
       }
 
-      if (botForm.signing_secret.trim()) {
-        await fetch("/api/vault", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            secret_name: signingSecretName,
-            secret_value: botForm.signing_secret.trim(),
-            secret_description: `Slack signing secret for ${agent.name}`,
-          }),
-        })
-      }
-
+      // Save app token if provided
       if (botForm.app_token.trim()) {
         await fetch("/api/vault", {
           method: "POST",
@@ -343,24 +175,24 @@ export default function ChannelsPage() {
           body: JSON.stringify({
             secret_name: appTokenSecretName,
             secret_value: botForm.app_token.trim(),
-            secret_description: `Slack app token (Socket Mode) for ${agent.name}`,
+            secret_description: `Slack app token for ${agent.name}`,
           }),
         })
       }
 
-      // Update agent with Slack app mapping
+      // Update agent
       await supabase
         .from("agents")
         .update({
           slack_app_id: botForm.slack_app_id.trim(),
           slack_bot_token_secret: tokenSecretName,
-          slack_signing_secret_name: signingSecretName,
+          slack_reply_mode: botForm.reply_mode,
         })
         .eq("id", botForm.agent_id)
 
       setBotDialogOpen(false)
       await Promise.all([fetchAgents(), fetchVaultSecrets()])
-      showStatus(`Slack bot configured for ${agent.name}`)
+      showStatus(`Bot configured for ${agent.name}`)
     } catch (err) {
       console.error("Failed to save bot config:", err)
     } finally {
@@ -376,12 +208,12 @@ export default function ChannelsPage() {
         .update({
           slack_app_id: null,
           slack_bot_token_secret: null,
-          slack_signing_secret_name: null,
+          slack_reply_mode: null,
         })
         .eq("id", agentId)
 
       await fetchAgents()
-      showStatus("Slack bot removed from agent")
+      showStatus("Bot removed")
     } catch (err) {
       console.error("Failed to remove bot:", err)
     }
@@ -396,29 +228,19 @@ export default function ChannelsPage() {
     setTimeout(() => setStatus(""), 3000)
   }
 
-  const webhookUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/api/slack-events`
-    : ""
-
-  const globalReady = hasSecret("SLACK_BOT_TOKEN") && hasSecret("SLACK_SIGNING_SECRET") && hasSecret("SLACK_APP_TOKEN")
-  const slackAgents = agents.filter((a) => a.slack_app_id)
+  const slackBots = agents.filter((a) => a.slack_app_id)
   const availableAgents = agents.filter((a) => !a.slack_app_id)
 
   if (!isSupabaseConfigured) {
     return <SetupRequired />
   }
 
-  const getStatusColor = (s: string) => {
-    if (s === "active") return "bg-green-500/10 text-green-700 border-green-500/20 dark:text-green-400 dark:bg-green-500/20"
-    return "bg-gray-500/10 text-gray-700 border-gray-500/20 dark:text-gray-400 dark:bg-gray-500/20"
-  }
-
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">Channels</h1>
-          <p className="text-muted-foreground">Configure integrations and monitor channel connections</p>
+          <h1 className="text-2xl font-bold">Slack Bots</h1>
+          <p className="text-muted-foreground">Configure Slack Socket Mode bots for agents</p>
         </div>
         <div className="flex items-center gap-2">
           {status && (
@@ -430,239 +252,99 @@ export default function ChannelsPage() {
           <Button variant="outline" size="sm" onClick={fetchAll}>
             <RefreshCw className="h-4 w-4" />
           </Button>
+          <Button size="sm" onClick={openAddBotDialog} disabled={availableAgents.length === 0}>
+            <Plus className="h-4 w-4 mr-1" />
+            Add Bot
+          </Button>
         </div>
       </div>
 
-      {/* Socket Mode Connection Status */}
+      {/* Socket Mode info */}
       <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/20 rounded-lg">
         <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
         <p className="text-sm text-blue-700 dark:text-blue-400">
-          Socket Mode: Connected apps will establish WebSocket connections to Slack (no public URL needed)
+          Socket Mode: No public URL required. Bots connect via WebSocket to Slack.
         </p>
       </div>
 
-      {/* ================================================================ */}
-      {/* Global Slack Config */}
-      {/* ================================================================ */}
+      {/* Bots List */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Shield className="h-5 w-5" />
-                Slack Integration
-              </CardTitle>
-              <CardDescription>
-                Configure Slack Socket Mode connection (no public URL required)
-              </CardDescription>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge className={globalReady
-                ? "bg-green-500/10 text-green-700 border-green-500/20 dark:text-green-400"
-                : "bg-yellow-500/10 text-yellow-700 border-yellow-500/20 dark:text-yellow-400"
-              }>
-                {globalReady ? "Ready" : "Setup Incomplete"}
-              </Badge>
-              <Button
-                size="sm"
-                disabled={
-                  savingSecret === "all" ||
-                  !SLACK_SECRETS.some((s) => secretInputs[s.key]?.trim())
-                }
-                onClick={handleSaveGlobalConfig}
-              >
-                <Save className="h-4 w-4" />
-                {savingSecret === "all" ? "Saving..." : "Save"}
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Global secrets */}
-          {vaultLoading ? (
-            <div className="space-y-2">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {SLACK_SECRETS.map((secret) => (
-                <div key={secret.key} className="space-y-1">
-                  <Label className="text-xs flex items-center gap-2">
-                    {secret.label}
-                    {hasSecret(secret.key) ? (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600">
-                        Configured
-                      </span>
-                    ) : (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/10 text-gray-500">
-                        Not set
-                      </span>
-                    )}
-                  </Label>
-                  <Input
-                    type="password"
-                    placeholder={hasSecret(secret.key) ? "Enter new value to update" : secret.placeholder}
-                    value={secretInputs[secret.key] || ""}
-                    onChange={(e) => setSecretInputs((prev) => ({ ...prev, [secret.key]: e.target.value }))}
-                    className="h-8 text-sm"
-                  />
-                  <p className="text-[10px] text-muted-foreground">
-                    {secret.description} — stored as <code className="bg-muted px-1 rounded">{secret.key}</code> in Vault
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Default Agent */}
-          <div className="space-y-1">
-            <Label className="text-xs">Default Agent</Label>
-            <div className="flex gap-2">
-              <Select value={defaultAgentId} onValueChange={(v) => handleSaveDefaultAgent(v)}>
-                <SelectTrigger className="h-8 text-sm">
-                  <SelectValue placeholder="Select default agent for Slack" />
-                </SelectTrigger>
-                <SelectContent>
-                  {agents.map((agent) => (
-                    <SelectItem key={agent.id} value={agent.id}>
-                      {agent.name} ({agent.slug})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              Handles messages from Slack apps not mapped to a specific agent
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ================================================================ */}
-      {/* Channel Connections + Slack Bot Mappings */}
-      {/* ================================================================ */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <CardTitle>Channel Connections</CardTitle>
-              <CardDescription>Active channels and Slack bot-to-agent mappings</CardDescription>
-            </div>
-            <Button size="sm" onClick={openAddBotDialog} disabled={availableAgents.length === 0}>
-              <Plus className="h-4 w-4" />
-              Add Slack Bot
-            </Button>
-          </div>
+          <CardTitle>Configured Bots ({slackBots.length})</CardTitle>
+          <CardDescription>Agents mapped to Slack apps</CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
             <div className="space-y-3">
               {[1, 2, 3].map((i) => (
-                <div key={i} className="flex items-center gap-4 p-3 rounded-md border">
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-4 w-20" />
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="h-4 w-20" />
-                  <div className="flex-1" />
-                  <Skeleton className="h-4 w-24" />
+                <div key={i} className="p-4 rounded-lg border">
+                  <Skeleton className="h-5 w-40 mb-2" />
+                  <Skeleton className="h-4 w-full" />
                 </div>
               ))}
             </div>
-          ) : (slackAgents.length === 0 && channels.length === 0) ? (
-            <div className="text-center py-6">
-              <AlertCircle className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-              <p className="text-sm text-muted-foreground">No connections or Slack bots configured yet</p>
+          ) : slackBots.length === 0 ? (
+            <div className="text-center py-12">
+              <p className="text-muted-foreground mb-4">No Slack bots configured</p>
+              <Button onClick={openAddBotDialog} disabled={availableAgents.length === 0}>
+                <Plus className="h-4 w-4 mr-1" />
+                Add Your First Bot
+              </Button>
             </div>
           ) : (
             <div className="space-y-3">
-              {/* Slack bot-to-agent mappings */}
-              {slackAgents.map((agent) => (
+              {slackBots.map((agent) => (
                 <div
-                  key={`bot-${agent.id}`}
-                  className="flex items-center gap-4 p-3 border rounded-lg hover:bg-accent/50 transition-colors flex-wrap"
+                  key={agent.id}
+                  className="p-4 rounded-lg border hover:bg-accent/50 transition-colors"
                 >
-                  <div className="flex-1 min-w-0 grid grid-cols-1 md:grid-cols-6 gap-3">
-                    <div>
-                      <p className="text-xs text-muted-foreground">Type</p>
-                      <p className="font-medium text-sm">Slack Bot</p>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 space-y-3">
+                      {/* Agent name */}
+                      <div>
+                        <h3 className="font-semibold text-lg">{agent.name}</h3>
+                        <p className="text-sm text-muted-foreground font-mono">{agent.slug}</p>
+                      </div>
+
+                      {/* Config grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Slack App ID</p>
+                          <p className="font-mono text-sm">{agent.slack_app_id}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Reply Mode</p>
+                          <Badge variant="outline">
+                            {agent.slack_reply_mode === 'all_messages' ? 'All Messages' : '@ Mentions Only'}
+                          </Badge>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Bot Token</p>
+                          <Badge className={
+                            agent.slack_bot_token_secret && hasSecret(agent.slack_bot_token_secret)
+                              ? "bg-green-500/10 text-green-700 border-green-500/20 dark:text-green-400"
+                              : "bg-yellow-500/10 text-yellow-700 border-yellow-500/20"
+                          }>
+                            {agent.slack_bot_token_secret && hasSecret(agent.slack_bot_token_secret)
+                              ? "Configured" : "Missing"}
+                          </Badge>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">App ID</p>
-                      <p className="font-mono text-sm">{agent.slack_app_id}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Agent</p>
-                      <p className="font-medium text-sm">{agent.name}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Bot Token</p>
-                      <Badge className={
-                        agent.slack_bot_token_secret && hasSecret(agent.slack_bot_token_secret)
-                          ? "bg-green-500/10 text-green-700 border-green-500/20 dark:text-green-400"
-                          : "bg-gray-500/10 text-gray-500 border-gray-500/20"
-                      }>
-                        {agent.slack_bot_token_secret && hasSecret(agent.slack_bot_token_secret)
-                          ? "Configured" : "Not set"}
-                      </Badge>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Signing Secret</p>
-                      <Badge className={
-                        agent.slack_signing_secret_name && hasSecret(agent.slack_signing_secret_name)
-                          ? "bg-green-500/10 text-green-700 border-green-500/20 dark:text-green-400"
-                          : "bg-gray-500/10 text-gray-500 border-gray-500/20"
-                      }>
-                        {agent.slack_signing_secret_name && hasSecret(agent.slack_signing_secret_name)
-                          ? "Configured" : "Not set"}
-                      </Badge>
-                    </div>
-                    <div className="flex items-end justify-end gap-1">
+
+                    {/* Actions */}
+                    <div className="flex gap-1">
                       <Button variant="outline" size="sm" onClick={() => openEditBotDialog(agent)}>
                         Edit
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleRemoveBot(agent.id)}>
-                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-9 w-9" 
+                        onClick={() => handleRemoveBot(agent.id)}
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {/* Channel connections */}
-              {channels.map((channel) => (
-                <div
-                  key={`ch-${channel.id}`}
-                  className="flex items-center gap-4 p-3 border rounded-lg hover:bg-accent/50 transition-colors"
-                >
-                  <div className="flex-1 min-w-0 grid grid-cols-1 md:grid-cols-6 gap-3">
-                    <div>
-                      <p className="text-xs text-muted-foreground">Type</p>
-                      <p className="font-medium text-sm capitalize">{channel.channel_type}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Channel ID</p>
-                      <p className="font-mono text-sm truncate">{channel.channel_id}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Name</p>
-                      <p className="font-medium text-sm">{channel.display_name || "—"}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Status</p>
-                      <Badge className={getStatusColor(channel.status)}>
-                        {channel.status}
-                      </Badge>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Agent</p>
-                      <p className="font-mono text-sm">{channel.agent_id ? channel.agent_id.slice(0, 8) : "—"}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Created</p>
-                      <p className="text-sm">
-                        {channel.created_at && formatDistanceToNow(new Date(channel.created_at), { addSuffix: true })}
-                      </p>
                     </div>
                   </div>
                 </div>
@@ -673,32 +355,31 @@ export default function ChannelsPage() {
       </Card>
 
       {/* ================================================================ */}
-      {/* Add/Edit Slack Bot Dialog */}
+      {/* Add/Edit Bot Dialog */}
       {/* ================================================================ */}
       <Dialog open={botDialogOpen} onOpenChange={setBotDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Shield className="h-5 w-5" />
+            <DialogTitle>
               {editingAgentId ? "Edit Slack Bot" : "Add Slack Bot"}
             </DialogTitle>
             <DialogDescription>
-              Map a Slack app to an agent. The agent will handle all messages from this app.
+              Configure Socket Mode bot for an agent
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {/* Agent selector (only for new) */}
+            {/* Agent selector */}
             {!editingAgentId && (
-              <div className="space-y-1">
-                <Label className="text-xs">Agent</Label>
+              <div className="space-y-2">
+                <Label>Agent</Label>
                 <Select value={botForm.agent_id} onValueChange={(v) => setBotForm((f) => ({ ...f, agent_id: v }))}>
-                  <SelectTrigger className="h-8 text-sm">
+                  <SelectTrigger>
                     <SelectValue placeholder="Select an agent" />
                   </SelectTrigger>
                   <SelectContent>
                     {availableAgents.map((agent) => (
                       <SelectItem key={agent.id} value={agent.id}>
-                        {agent.name} ({agent.slug})
+                        {agent.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -707,27 +388,49 @@ export default function ChannelsPage() {
             )}
 
             {/* App ID */}
-            <div className="space-y-1">
-              <Label className="text-xs">Slack App ID</Label>
+            <div className="space-y-2">
+              <Label>Slack App ID</Label>
               <Input
                 value={botForm.slack_app_id}
                 onChange={(e) => setBotForm((f) => ({ ...f, slack_app_id: e.target.value }))}
                 placeholder="A0XXXXXXXXX"
-                className="h-8 text-sm font-mono"
+                className="font-mono"
               />
-              <p className="text-[10px] text-muted-foreground">
-                Found on your Slack app&apos;s Basic Information page
+              <p className="text-xs text-muted-foreground">
+                From your Slack app's Basic Information page
+              </p>
+            </div>
+
+            {/* Reply Mode */}
+            <div className="space-y-2">
+              <Label>Reply Mode</Label>
+              <Select 
+                value={botForm.reply_mode} 
+                onValueChange={(v: "all_messages" | "mentions_only") => setBotForm((f) => ({ ...f, reply_mode: v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="mentions_only">@ Mentions Only</SelectItem>
+                  <SelectItem value="all_messages">All Messages</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {botForm.reply_mode === 'all_messages' 
+                  ? 'Bot replies to all messages in channels it\'s added to' 
+                  : 'Bot only replies when @mentioned'}
               </p>
             </div>
 
             {/* Bot Token */}
-            <div className="space-y-1">
-              <Label className="text-xs flex items-center gap-2">
-                Bot Token
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                Bot Token (xoxb-...)
                 {editingAgentId && (() => {
                   const a = agents.find((ag) => ag.id === editingAgentId)
                   return a?.slack_bot_token_secret && hasSecret(a.slack_bot_token_secret)
-                    ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600">Configured</span>
+                    ? <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-600">Configured</span>
                     : null
                 })()}
               </Label>
@@ -736,61 +439,21 @@ export default function ChannelsPage() {
                 value={botForm.bot_token}
                 onChange={(e) => setBotForm((f) => ({ ...f, bot_token: e.target.value }))}
                 placeholder={editingAgentId ? "Enter new token to update" : "xoxb-..."}
-                className="h-8 text-sm"
               />
-              {botForm.agent_id && (
-                <p className="text-[10px] text-muted-foreground">
-                  Stored as <code className="bg-muted px-1 rounded">
-                    SLACK_BOT_TOKEN_{(agents.find((a) => a.id === botForm.agent_id)?.slug || "").toUpperCase().replace(/-/g, "_")}
-                  </code>
-                </p>
-              )}
             </div>
 
-            {/* Signing Secret */}
-            <div className="space-y-1">
-              <Label className="text-xs flex items-center gap-2">
-                Signing Secret
-                {editingAgentId && (() => {
-                  const a = agents.find((ag) => ag.id === editingAgentId)
-                  return a?.slack_signing_secret_name && hasSecret(a.slack_signing_secret_name)
-                    ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600">Configured</span>
-                    : null
-                })()}
-              </Label>
-              <Input
-                type="password"
-                value={botForm.signing_secret}
-                onChange={(e) => setBotForm((f) => ({ ...f, signing_secret: e.target.value }))}
-                placeholder={editingAgentId ? "Enter new secret to update" : "Enter signing secret"}
-                className="h-8 text-sm"
-              />
-              {botForm.agent_id && (
-                <p className="text-[10px] text-muted-foreground">
-                  Stored as <code className="bg-muted px-1 rounded">
-                    SLACK_SIGNING_SECRET_{(agents.find((a) => a.id === botForm.agent_id)?.slug || "").toUpperCase().replace(/-/g, "_")}
-                  </code>
-                </p>
-              )}
-            </div>
-
-            {/* App Token (for Socket Mode) */}
-            <div className="space-y-1">
-              <Label className="text-xs">App Token (Socket Mode)</Label>
+            {/* App Token */}
+            <div className="space-y-2">
+              <Label>App Token (xapp-...) - Optional</Label>
               <Input
                 type="password"
                 value={botForm.app_token}
                 onChange={(e) => setBotForm((f) => ({ ...f, app_token: e.target.value }))}
-                placeholder="xapp-... (optional, falls back to global)"
-                className="h-8 text-sm"
+                placeholder="xapp-... (leave empty to use global)"
               />
-              {botForm.agent_id && (
-                <p className="text-[10px] text-muted-foreground">
-                  Stored as <code className="bg-muted px-1 rounded">
-                    SLACK_APP_TOKEN_{(agents.find((a) => a.id === botForm.agent_id)?.slug || "").toUpperCase().replace(/-/g, "_")}
-                  </code> — leave empty to use global app token
-                </p>
-              )}
+              <p className="text-xs text-muted-foreground">
+                Falls back to SLACK_APP_TOKEN if not provided
+              </p>
             </div>
           </div>
           <DialogFooter>
@@ -801,7 +464,6 @@ export default function ChannelsPage() {
               onClick={handleSaveBot}
               disabled={savingBot || !botForm.agent_id || !botForm.slack_app_id.trim()}
             >
-              <Save className="h-4 w-4" />
               {savingBot ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>

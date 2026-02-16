@@ -112,8 +112,8 @@ export default function AgentDetailPage() {
         supabase.from("provider_models").select("*").eq("is_enabled", true).order("model_name"),
         supabase.from("tools").select("*").eq("is_active", true),
         supabase.from("skills").select("*").eq("is_active", true),
-        supabase.from("agent_tools").select("tool_id, inherited_from_skill_id"),
-        supabase.from("agent_skills").select("skill_id"),
+        supabase.from("agent_tools").select("tool_id, inherited_from_skill_id").eq("agent_id", agentId),
+        supabase.from("agent_skills").select("skill_id").eq("agent_id", agentId),
       ])
 
       setProviders(providersData || [])
@@ -176,16 +176,37 @@ export default function AgentDetailPage() {
         daily_token_budget: !isNaN(parsedBudget) ? parsedBudget : null,
       }
 
+      console.log("[AGENT_SAVE] Updating agent", { agentId, payload })
       const { error } = await supabase.from("agents").update(payload).eq("id", agentId)
 
-      if (error) throw error
+      if (error) {
+        console.error("[AGENT_SAVE] Agent update failed:", error)
+        throw error
+      }
+      console.log("[AGENT_SAVE] Agent updated successfully")
 
+      console.log("[AGENT_SAVE] Syncing tools/skills", {
+        agentId,
+        selectedSkills,
+        selectedTools,
+        skillCount: selectedSkills.length,
+        toolCount: selectedTools.length,
+      })
       const syncErr = await syncAgentSkillsAndTools(supabase, agentId, selectedSkills, selectedTools)
-      if (syncErr.error) throw new Error(syncErr.error)
+      if (syncErr.error) {
+        console.error("[AGENT_SAVE] Sync failed:", syncErr.error)
+        throw new Error(syncErr.error)
+      }
+      console.log("[AGENT_SAVE] Tools/skills synced successfully")
+
+      // Small delay to ensure DB replication completes
+      await new Promise(resolve => setTimeout(resolve, 500))
 
       await fetchAgent()
+      console.log("[AGENT_SAVE] Agent refetched - save complete")
+      alert("Agent saved successfully!")
     } catch (error) {
-      console.error("Failed to save:", error)
+      console.error("[AGENT_SAVE] Save failed:", error)
       alert(error instanceof Error ? error.message : "Failed to save")
     } finally {
       setSaving(false)

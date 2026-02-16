@@ -135,6 +135,72 @@ async function invokeChildTask(
 }
 
 /**
+ * After a child task completes, check if it has a parent waiting
+ * and automatically resume it. The DB trigger check_spawn_completion
+ * sets the parent to 'pending' with _spawn_result in context.
+ * We just need to pick it up and process it.
+ */
+async function resumeParentIfNeeded(
+  supabase: SupabaseClient,
+  task: Record<string, any>,
+  supabaseUrl: string,
+  serviceRoleKey: string,
+): Promise<void> {
+  try {
+    if (!task.session_id) return;
+
+    // Check if this task's session is a spawn session with a parent
+    const { data: session } = await supabase
+      .from("sessions")
+      .select("spawn_parent_task_id")
+      .eq("id", task.session_id)
+      .single();
+
+    if (!session?.spawn_parent_task_id) return;
+
+    const parentTaskId = session.spawn_parent_task_id;
+
+    // Small delay to let the trigger finish updating the parent
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Verify parent is now pending (set by check_spawn_completion trigger)
+    const { data: parentTask } = await supabase
+      .from("tasks")
+      .select("id, status")
+      .eq("id", parentTaskId)
+      .single();
+
+    if (!parentTask || parentTask.status !== "pending") {
+      console.log("[MAIN] Parent task not ready for resumption", {
+        parent_id: parentTaskId,
+        status: parentTask?.status,
+      });
+      return;
+    }
+
+    console.log("[MAIN] Resuming parent task after delegation", {
+      child_task_id: task.id,
+      parent_task_id: parentTaskId,
+    });
+
+    // Fire-and-forget: process the parent task
+    processTask(parentTaskId, supabaseUrl, serviceRoleKey)
+      .then((result) => {
+        if (result.success) {
+          console.log("[MAIN] Parent task resumed successfully", { parent_task_id: parentTaskId });
+        } else {
+          console.error("[MAIN] Parent task resumption failed:", result.error);
+        }
+      })
+      .catch((err) => {
+        console.error("[MAIN] Parent task resumption error:", err);
+      });
+  } catch (err) {
+    console.error("[MAIN] Error checking parent resumption:", err);
+  }
+}
+
+/**
  * Process a task: fetch input, run LLM loop, execute tools, complete
  *
  * This is a Node.js/Next.js port of supabase/functions/process-task/index.ts
@@ -594,7 +660,21 @@ export async function processTask(
       }
 
       const outputText = childOutput?.response || JSON.stringify(childOutput, null, 2);
-      systemPrompt += `\n\n---\n## Delegation Result (DO NOT re-delegate — use this result)\nAgent "${sr.agent_slug}" completed with status: ${sr.status}\nResult:\n${outputText}`;
+      systemPrompt += `\n\n---\n## Delegation Result\nAgent "${sr.agent_slug}" completed with status: ${sr.status}\nResult:\n${outputText}\n\nIMPORTANT: Synthesize this result into your response. Do NOT delegate again.`;
+
+      // Remove all spawn/handoff tools to prevent re-delegation loops
+      const spawnToolSlugs = tools.filter((t) => t.type === "spawn" || t.type === "handoff").map((t) => t.slug);
+      if (spawnToolSlugs.length > 0) {
+        const beforeCount = toolDefinitions.length;
+        const filtered = toolDefinitions.filter((td) => !spawnToolSlugs.includes(td.function.name));
+        toolDefinitions.length = 0;
+        toolDefinitions.push(...filtered);
+        console.log("[MAIN] Removed spawn/handoff tools to prevent re-delegation", {
+          removed: beforeCount - toolDefinitions.length,
+          remaining: toolDefinitions.length,
+        });
+      }
+
       console.log("[MAIN] Injected spawn result", {
         from_agent: sr.agent_slug,
         status: sr.status,
@@ -706,6 +786,7 @@ export async function processTask(
             tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
             tool_choice: toolDefinitions.length > 0 ? "auto" : undefined,
           }),
+          signal: AbortSignal.timeout(120000), // 2 min timeout
         });
 
         if (!fetchResponse.ok) {
@@ -1355,6 +1436,13 @@ export async function processTask(
 
     console.log("[MAIN] Task completed", { task_id: taskId, duration_ms: totalDuration });
 
+    // Send Slack replies if needed (bypass queue system)
+    await sendSlackRepliesIfNeeded(supabase, taskId);
+
+    // Resume parent task if this was a delegated child
+    // The check_spawn_completion trigger already set parent to 'pending' with _spawn_result
+    await resumeParentIfNeeded(supabase, task, supabaseUrl, serviceRoleKey);
+
     return { success: true, response: llmResponse };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1398,6 +1486,41 @@ export async function processTask(
     }
 
     return { success: false, error: message };
+  }
+}
+
+/**
+ * Send any pending Slack replies for this task (bypass queue system)
+ */
+async function sendSlackRepliesIfNeeded(supabase: SupabaseClient, taskId: string): Promise<void> {
+  try {
+    // Find any unsent Slack messages for this task (only assistant_message)
+    const { data: pendingMessages } = await supabase
+      .from("task_messages")
+      .select("*")
+      .eq("task_id", taskId)
+      .eq("type", "assistant_message")
+      .eq("slack_notify", true)
+      .eq("slack_sent", false);
+
+    if (!pendingMessages || pendingMessages.length === 0) {
+      return;
+    }
+
+    console.log(`[MAIN] Sending ${pendingMessages.length} Slack reply(s) for task ${taskId}`);
+
+    // Import and call reply handler directly
+    const { handleSlackReply } = await import("../slack/reply-handler");
+    
+    for (const msg of pendingMessages) {
+      try {
+        await handleSlackReply(msg as any);
+      } catch (err) {
+        console.error(`[MAIN] Failed to send Slack reply ${msg.id}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error("[MAIN] Error checking Slack replies:", err);
   }
 }
 

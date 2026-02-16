@@ -1,0 +1,114 @@
+---
+description: Task processing pattern - always call /api/process-task after creating tasks
+globs: "{**/process-task*.ts,**/bolt-app.ts,**/chat/page.tsx,**/engine/**/*.ts}"
+alwaysApply: false
+---
+
+# Task Processing Pattern
+
+## Critical Flow
+
+**ALWAYS** follow this pattern when creating tasks:
+
+```typescript
+// 1. Create task with status "pending"
+const { data: task } = await supabase
+  .from("tasks")
+  .insert({
+    agent_id: agent.id,
+    session_id: sessionId,
+    status: "pending",
+    input: { message: "user input" },
+  })
+  .select()
+  .single();
+
+// 2. IMMEDIATELY trigger processing (don't wait for queue)
+fetch('/api/process-task', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ task_id: task.id }),
+});
+```
+
+## Why This Pattern
+
+**NO QUEUES**: We removed queue-based processing (PGMQ) in favor of direct API calls.
+- Simpler architecture
+- Faster response time
+- No schema cache issues
+- Works identically in all contexts (chat UI, Slack, jobs)
+
+## /api/process-task Endpoint
+
+Located: `src/app/api/process-task/route.ts`
+
+**What it does:**
+1. Accepts `{ task_id: string }` in request body
+2. Calls `processTask()` async (fire-and-forget)
+3. Returns immediately with `{ ok: true, task_id }`
+4. Task processing happens in background
+
+**Key behavior:**
+- Non-blocking: Returns before task completes
+- Fire-and-forget: Don't await the processing
+- Async execution: `processTask()` runs independently
+
+## Where This Pattern is Used
+
+✅ **Chat UI** (`src/app/chat/page.tsx`):
+```typescript
+const { data: task } = await supabase.from("tasks").insert(taskData).select().single();
+await fetch('/api/process-task', {
+  method: 'POST',
+  body: JSON.stringify({ task_id: task.id }),
+});
+```
+
+✅ **Slack Bot** (`src/lib/slack/bolt-app.ts`):
+```typescript
+const { data: task } = await supabase.from("tasks").insert({...}).select().single();
+await fetch('http://localhost:3000/api/process-task', {
+  method: 'POST',
+  body: JSON.stringify({ task_id: task.id }),
+});
+```
+
+✅ **Scheduled Jobs** (`src/app/api/jobs/[id]/run/route.ts`):
+Same pattern - create task, then trigger processing
+
+## Task Input Format
+
+Always use object format with `message` property:
+
+```typescript
+// ✅ CORRECT
+input: { message: "user text" }
+
+// ❌ WRONG
+input: "user text"  // Will fail - tasks expect { message: string }
+```
+
+## Don't Do This
+
+❌ **Don't wait for queue polling:**
+```typescript
+// OLD WAY - NO LONGER USED
+await supabase.from("tasks").insert(task);
+// Waiting for PGMQ worker to poll... ❌
+```
+
+❌ **Don't await processTask directly:**
+```typescript
+// This blocks - use /api/process-task instead
+await processTask(task.id);  // ❌
+```
+
+## Response Flow
+
+Task responses (messages) are handled via:
+1. `processTask()` generates task_messages
+2. For Slack: Trigger queues reply via `slack_notify` flag
+3. For Chat: Real-time subscription updates UI
+
+No manual intervention needed after calling `/api/process-task`.

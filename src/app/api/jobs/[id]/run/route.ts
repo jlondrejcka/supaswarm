@@ -27,15 +27,23 @@ export async function POST(
       );
     }
 
-    // Create session
+    // Create session - use Slack channel if configured in delivery_context
+    const deliveryContext = (job.task_context as Record<string, any>)?.delivery_context;
+    const isSlackDelivery = deliveryContext?.channel_type === "slack" && deliveryContext?.channel_id;
+    
     const { data: session, error: sessionError } = await supabase
       .from("sessions")
       .insert({
         agent_id: job.agent_id,
-        channel_type: "cron",
-        channel_id: job.id,
-        display_name: `Manual Run: ${job.name}`,
+        channel_type: isSlackDelivery ? "slack" : "cron",
+        channel_id: isSlackDelivery ? deliveryContext.channel_id : job.id,
+        display_name: `${isSlackDelivery ? 'Slack Job' : 'Manual Run'}: ${job.name}`,
         status: "active",
+        // Note: No thread_ts for cron jobs - posts as new message, not in thread
+        slack_meta: isSlackDelivery ? {
+          channel_id: deliveryContext.channel_id,
+          posted_messages: [],
+        } : null,
       })
       .select()
       .single();
@@ -72,25 +80,56 @@ export async function POST(
       );
     }
 
-    // Log the manual run
-    await supabase
+    // Log the manual run (initially pending)
+    const { data: jobRun } = await supabase
       .from("scheduled_job_runs")
       .insert({
         job_id: job.id,
         task_id: task.id,
-        status: "success",
-      });
+        status: "pending",
+      })
+      .select()
+      .single();
 
-    // Process task locally
+    // Process task locally and update job run status
     const { processTask } = await import("@/lib/engine/process-task");
     try {
       processTask(task.id, supabaseUrl, supabaseServiceKey)
-        .then((result) => {
+        .then(async (result) => {
+          if (jobRun) {
+            await supabase
+              .from("scheduled_job_runs")
+              .update({
+                status: result.success ? "success" : "failed",
+                error_message: result.success ? null : result.error,
+              })
+              .eq("id", jobRun.id);
+          }
           if (!result.success) console.error("Job task failed:", result.error);
         })
-        .catch((err) => console.error("Job task error:", err));
+        .catch(async (err) => {
+          console.error("Job task error:", err);
+          if (jobRun) {
+            await supabase
+              .from("scheduled_job_runs")
+              .update({
+                status: "failed",
+                error_message: err instanceof Error ? err.message : String(err),
+              })
+              .eq("id", jobRun.id);
+          }
+        });
     } catch (invokeErr) {
       console.error("Failed to invoke process-task:", invokeErr);
+      if (jobRun) {
+        await supabase
+          .from("scheduled_job_runs")
+          .update({
+            status: "failed",
+            error_message: invokeErr instanceof Error ? invokeErr.message : String(invokeErr),
+          })
+          .eq("id", jobRun.id);
+      }
     }
 
     return NextResponse.json({

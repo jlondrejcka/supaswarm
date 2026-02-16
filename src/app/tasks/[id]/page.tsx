@@ -141,7 +141,17 @@ export default function TaskDetailPage() {
         return
       }
 
-      // Task pickup handled by pgmq queue trigger
+      // Fire task processing immediately
+      try {
+        await fetch('/api/process-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_id: taskId }),
+        })
+      } catch (err) {
+        console.error('Failed to invoke process-task:', err)
+      }
+
       await fetchTask()
     } catch (error) {
       console.error("Failed to retry task:", error)
@@ -169,6 +179,17 @@ export default function TaskDetailPage() {
       if (!rerunResult?.success || !rerunResult.task_id) {
         console.error("Rerun failed:", rerunResult?.error)
         return
+      }
+
+      // Fire task processing immediately
+      try {
+        await fetch('/api/process-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_id: rerunResult.task_id }),
+        })
+      } catch (err) {
+        console.error('Failed to invoke process-task:', err)
       }
 
       router.push(`/tasks/${rerunResult.task_id}`)

@@ -55,6 +55,7 @@ export interface Agent {
   slack_app_id?: string | null;
   slack_bot_token_secret?: string | null;
   slack_signing_secret_name?: string | null;
+  slack_reply_mode?: 'all_messages' | 'mentions_only' | null;
 }
 
 export interface Skill {

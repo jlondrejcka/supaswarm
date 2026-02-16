@@ -103,17 +103,55 @@ export async function syncAgentSkillsAndTools(
   selectedToolIds: string[]
 ): Promise<{ error?: string }> {
   try {
-    await supabase.from("agent_skills").delete().eq("agent_id", agentId);
-    await supabase.from("agent_tools").delete().eq("agent_id", agentId);
+    console.log("[SYNC] Starting sync", { agentId, skillIds: selectedSkillIds, toolIds: selectedToolIds });
 
+    // Delete existing agent_skills
+    const { error: deleteSkillsError } = await supabase
+      .from("agent_skills")
+      .delete()
+      .eq("agent_id", agentId);
+    
+    if (deleteSkillsError) {
+      console.error("[SYNC] Failed to delete agent_skills:", deleteSkillsError);
+      return { error: `Failed to delete skills: ${deleteSkillsError.message}` };
+    }
+    console.log("[SYNC] Deleted existing agent_skills");
+
+    // Delete existing agent_tools
+    const { error: deleteToolsError } = await supabase
+      .from("agent_tools")
+      .delete()
+      .eq("agent_id", agentId);
+    
+    if (deleteToolsError) {
+      console.error("[SYNC] Failed to delete agent_tools:", deleteToolsError);
+      return { error: `Failed to delete tools: ${deleteToolsError.message}` };
+    }
+    console.log("[SYNC] Deleted existing agent_tools");
+
+    // Insert new skills
     if (selectedSkillIds.length > 0) {
-      const { error } = await supabase.from("agent_skills").insert(
-        selectedSkillIds.map((skill_id) => ({ agent_id: agentId, skill_id, priority: 5 }))
-      );
-      if (error) return { error: error.message };
+      const skillRows = selectedSkillIds.map((skill_id) => ({ 
+        agent_id: agentId, 
+        skill_id, 
+        priority: 5 
+      }));
+      console.log("[SYNC] Inserting agent_skills:", skillRows);
+      
+      const { error } = await supabase.from("agent_skills").insert(skillRows);
+      if (error) {
+        console.error("[SYNC] Failed to insert agent_skills:", error);
+        return { error: error.message };
+      }
+      console.log("[SYNC] Inserted agent_skills successfully");
+    } else {
+      console.log("[SYNC] No skills to insert");
     }
 
+    // Compute and insert tools (including inherited from skills)
     const rows = await computeAgentToolsRows(supabase, selectedSkillIds, selectedToolIds);
+    console.log("[SYNC] Computed agent_tools rows:", rows);
+
     const toInsert = rows.map((r) => ({
       agent_id: agentId,
       tool_id: r.tool_id,
@@ -121,14 +159,22 @@ export async function syncAgentSkillsAndTools(
     }));
 
     if (toInsert.length > 0) {
+      console.log("[SYNC] Inserting agent_tools:", toInsert);
       const { error } = await supabase.from("agent_tools").insert(toInsert);
-      if (error) return { error: error.message };
+      if (error) {
+        console.error("[SYNC] Failed to insert agent_tools:", error);
+        return { error: error.message };
+      }
+      console.log("[SYNC] Inserted agent_tools successfully");
+    } else {
+      console.log("[SYNC] No tools to insert");
     }
 
+    console.log("[SYNC] Sync completed successfully");
     return {};
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
-    console.error("syncAgentSkillsAndTools error:", msg);
+    console.error("[SYNC] Exception during sync:", msg, err);
     return { error: msg };
   }
 }

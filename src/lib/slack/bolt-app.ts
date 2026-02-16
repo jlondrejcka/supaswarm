@@ -218,10 +218,10 @@ function setupEventListeners(app: App, agent: Agent): void {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // Listen for messages
-  app.message(async ({ message, say }: any) => {
-    // Add type guard for message
-    const typedMessage = message as {
+  // Shared handler for both messages and mentions
+  const handleIncomingMessage = async (event: any, say: any, context: any) => {
+    // Add type guard for event
+    const typedMessage = event as {
       type?: string;
       text?: string;
       bot_id?: string;
@@ -243,6 +243,19 @@ function setupEventListeners(app: App, agent: Agent): void {
       return;
     }
 
+    // Check reply mode
+    const replyMode = agent.slack_reply_mode || 'mentions_only';
+    if (replyMode === 'mentions_only') {
+      // Only respond if bot is mentioned
+      const botUserId = context.botUserId;
+      const isMentioned = typedMessage.text.includes(`<@${botUserId}>`);
+      
+      if (!isMentioned) {
+        console.log("[BOLT] Ignoring message (mentions_only mode, bot not mentioned)");
+        return;
+      }
+    }
+
     try {
       const eventId = `${typedMessage.ts}-${typedMessage.channel}`;
       const eventTs = typedMessage.ts || new Date().toISOString();
@@ -254,6 +267,10 @@ function setupEventListeners(app: App, agent: Agent): void {
       }
 
       // Get or create session
+      // Use composite channel_id to include thread for proper session isolation
+      const threadTs = (typedMessage.thread_ts || typedMessage.ts) as string;
+      const compositeChannelId = `${typedMessage.channel}:${threadTs}`;
+      
       const {
         data: existingSession,
         error: sessionError,
@@ -261,9 +278,8 @@ function setupEventListeners(app: App, agent: Agent): void {
         .from("sessions")
         .select("id, slack_meta")
         .eq("channel_type", "slack")
-        .eq("channel_id", typedMessage.channel as string)
-        .eq("thread_ts", (typedMessage.thread_ts || typedMessage.ts) as string)
-        .eq("is_closed", false)
+        .eq("channel_id", compositeChannelId)
+        .eq("status", "active")
         .order("created_at", { ascending: false })
         .limit(1)
         .single();
@@ -281,11 +297,12 @@ function setupEventListeners(app: App, agent: Agent): void {
           .insert({
             agent_id: agent.id,
             channel_type: "slack",
-            channel_id: typedMessage.channel as string,
-            is_closed: false,
+            channel_id: compositeChannelId,
+            display_name: `Slack: ${typedMessage.channel}`,
+            status: "active",
             slack_meta: {
               channel_id: typedMessage.channel as string,
-              thread_ts: (typedMessage.thread_ts || typedMessage.ts) as string,
+              thread_ts: threadTs,
               original_message_ts: typedMessage.ts as string,
               api_app_id: agent.slack_app_id,
               user_id: typedMessage.user as string,
@@ -310,9 +327,9 @@ function setupEventListeners(app: App, agent: Agent): void {
         .insert({
           session_id: sessionId,
           agent_id: agent.id,
-          input: typedMessage.text,
+          input: { message: typedMessage.text },
           status: "pending",
-          metadata: {
+          context: {
             slack_message_ts: typedMessage.ts,
             slack_channel: typedMessage.channel,
             slack_thread_ts: typedMessage.thread_ts || typedMessage.ts,
@@ -326,28 +343,60 @@ function setupEventListeners(app: App, agent: Agent): void {
         return;
       }
 
-      // Add eyes reaction (ack)
+      // Add eyes reaction (ack) - optional, may fail if scope missing
       const botToken = await getVaultSecret(agent.slack_bot_token_secret!);
       if (botToken) {
-        await slackApi(botToken, "reactions.add", {
-          channel: typedMessage.channel as string,
-          timestamp: typedMessage.ts as string,
-          name: "eyes",
-        });
+        try {
+          await slackApi(botToken, "reactions.add", {
+            channel: typedMessage.channel as string,
+            timestamp: typedMessage.ts as string,
+            name: "eyes",
+          });
+        } catch (reactionError) {
+          console.log("[BOLT] Could not add reaction (scope may be missing):", reactionError);
+        }
       }
 
       console.log("[BOLT] Created task", {
         task_id: task.id,
         session_id: sessionId,
         agent_id: agent.id,
+        thread_ts: typedMessage.thread_ts || typedMessage.ts,
       });
 
-      // Acknowledge the message
-      await say(`:eyes: Processing your message...`);
+      // Trigger task processing immediately (same as chat UI)
+      try {
+        const processRes = await fetch('http://localhost:3000/api/process-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_id: task.id }),
+        });
+        if (!processRes.ok) {
+          console.error('[BOLT] Process task error:', await processRes.text());
+        } else {
+          console.log('[BOLT] Task processing triggered');
+        }
+      } catch (processError) {
+        console.error('[BOLT] Failed to invoke process-task:', processError);
+      }
     } catch (err) {
       console.error("[BOLT] Error handling message:", err);
-      await say(`:warning: An error occurred while processing your message.`);
+      // Post error in thread
+      await say({
+        text: `:warning: An error occurred while processing your message.`,
+        thread_ts: typedMessage.thread_ts || typedMessage.ts,
+      });
     }
+  };
+
+  // Listen for regular messages (DMs and all_messages mode)
+  app.message(async ({ message, say, context }: any) => {
+    await handleIncomingMessage(message, say, context);
+  });
+
+  // Listen for @mentions (mentions_only mode in channels)
+  app.event('app_mention', async ({ event, say, context }: any) => {
+    await handleIncomingMessage(event, say, context);
   });
 
   // Handle errors

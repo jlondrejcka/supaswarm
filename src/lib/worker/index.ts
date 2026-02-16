@@ -56,9 +56,9 @@ class Worker {
     }
 
     this.isRunning = true;
-    console.log("[WORKER] Starting embedded pgmq worker");
+    console.log("[WORKER] Starting embedded worker");
 
-    // Start polling different queues
+    // Start polling different queues (may not work on remote DB)
     this.startPolling("task_processing");
     this.startPolling("context_graph_jobs");
     this.startPolling("slack_replies");

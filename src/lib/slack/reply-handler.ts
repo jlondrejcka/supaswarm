@@ -157,7 +157,7 @@ export async function handleSlackReply(reply: SlackReply): Promise<void> {
     // ---- Step 1: Fetch task + session ----
     const { data: task, error: taskError } = await supabase
       .from("tasks")
-      .select("id, session_id, agent_id, input, status")
+      .select("id, session_id, agent_id, input, context, status")
       .eq("id", reply.task_id)
       .single();
 
@@ -250,16 +250,23 @@ export async function handleSlackReply(reply: SlackReply): Promise<void> {
 
     console.log("[SLACK-REPLY] Posting to Slack", {
       channel: channelId,
-      thread_ts: threadTs,
+      thread_ts: threadTs || "(new message)",
       type: reply.type,
       text_length: slackText.length,
     });
 
-    const postResult = await slackApi(botToken, "chat.postMessage", {
+    // Build message payload - only include thread_ts if present
+    // This ensures cron jobs post as new messages, not in threads
+    const messagePayload: Record<string, any> = {
       channel: channelId,
-      thread_ts: threadTs,
       text: slackText,
-    });
+    };
+    
+    if (threadTs) {
+      messagePayload.thread_ts = threadTs;
+    }
+
+    const postResult = await slackApi(botToken, "chat.postMessage", messagePayload);
 
     if (!postResult.ok) {
       console.error("[SLACK-REPLY] Failed to post:", postResult.error);
@@ -299,9 +306,9 @@ export async function handleSlackReply(reply: SlackReply): Promise<void> {
     // ---- Step 6: Remove eyes reaction on final message ----
     if (reply.type === "assistant_message") {
       // Remove reaction from the original user message that triggered this task
-      const taskInput = task.input as { slack_message_ts?: string } | null;
+      const taskContext = task.context as { slack_message_ts?: string } | null;
       const reactionMessageTs =
-        taskInput?.slack_message_ts || slackMeta.original_message_ts;
+        taskContext?.slack_message_ts || slackMeta.original_message_ts;
 
       if (reactionMessageTs) {
         await slackApi(botToken, "reactions.remove", {

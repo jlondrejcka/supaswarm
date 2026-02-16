@@ -520,7 +520,19 @@ function ChatPageContent() {
         },
       ])
 
-      // Task pickup handled by pgmq queue trigger (queue_task_for_processing)
+      // Fire task processing immediately (local API)
+      try {
+        const res = await fetch('/api/process-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_id: task.id }),
+        })
+        if (!res.ok) {
+          console.error('Process task error:', await res.text())
+        }
+      } catch (processError) {
+        console.error('Failed to invoke process-task:', processError)
+      }
     } catch (err) {
       console.error("Failed to create task:", err)
       setMessages((prev) => [

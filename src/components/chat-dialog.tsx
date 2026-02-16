@@ -438,39 +438,19 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
         },
       ])
 
-      // Check task status before processing
-      // Only process if task is still pending (not already processed)
-      const { data: taskCheck, error: checkError } = await supabase
-        .from("tasks")
-        .select("status")
-        .eq("id", task.id)
-        .single()
-
-      if (checkError) {
-        console.error('Failed to check task status:', checkError)
-      }
-
-      // Only invoke if task is still pending
-      if (taskCheck && (taskCheck.status === "pending" || taskCheck.status === "pending_subtask")) {
-        // Invoke local task processing endpoint (replaces remote edge function)
-        try {
-          const res = await fetch('/api/process-task', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ task_id: task.id }),
-          })
-          
-          if (!res.ok) {
-            console.error('Process task error:', await res.text())
-          }
-        } catch (processError) {
-          console.error('Failed to process task:', processError)
-        }
-      } else {
-        console.log('Task already processed, skipping', {
-          task_id: task.id,
-          status: taskCheck?.status,
+      // Fire task processing immediately (local)
+      try {
+        const res = await fetch('/api/process-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_id: task.id }),
         })
+        
+        if (!res.ok) {
+          console.error('Process task error:', await res.text())
+        }
+      } catch (processError) {
+        console.error('Failed to process task:', processError)
       }
 
       // Fetch task messages after a delay to allow processing
