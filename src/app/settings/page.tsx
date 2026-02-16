@@ -48,7 +48,7 @@ const REQUIRED_SECRETS = [
   {
     name: "OLLAMA_API_KEY",
     label: "Ollama API Key",
-    description: "Local Ollama instance (e.g., http://localhost:11434/v1)",
+    description: "Any value works (e.g., ollama-local). Ollama doesn't validate keys.",
     helpUrl: null,
   },
 ]
@@ -635,17 +635,17 @@ export default function SettingsPage() {
               <div className="space-y-1">
                 <Label htmlFor="api_key" className="flex items-center gap-2 text-xs">
                   <Shield className="h-3 w-3" />
-                  {selectedProvider?.name === "ollama" ? "Ollama URL" : "API Key"}
+                  API Key
                   {selectedProviderHasKey && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600">Already configured</span>
                   )}
                 </Label>
                 <Input
                   id="api_key"
-                  type={selectedProvider?.name === "ollama" ? "text" : "password"}
+                  type="password"
                   value={formData.api_key}
                   onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-                  placeholder={selectedProvider?.name === "ollama" ? "ollama-local or http://localhost:11434/v1" : selectedProviderHasKey ? "Enter new key to update" : "Enter your API key"}
+                  placeholder={selectedProvider?.name === "ollama" ? "ollama-local" : selectedProviderHasKey ? "Enter new key to update" : "Enter your API key"}
                   data-testid="input-api-key"
                   className="h-8 text-sm"
                 />
