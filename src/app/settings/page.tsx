@@ -35,6 +35,7 @@ const ENV_VAR_NAMES: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
   google: "GOOGLE_AI_API_KEY",
   openai: "OPENAI_API_KEY",
+  ollama: "OLLAMA_API_KEY",
 }
 
 const REQUIRED_SECRETS = [
@@ -625,21 +626,21 @@ export default function SettingsPage() {
               />
             </div>
 
-            {selectedProvider?.requires_api_key && (
+            {(selectedProvider?.requires_api_key || selectedProvider?.name === "ollama") && (
               <div className="space-y-1">
                 <Label htmlFor="api_key" className="flex items-center gap-2 text-xs">
                   <Shield className="h-3 w-3" />
-                  API Key
+                  {selectedProvider?.name === "ollama" ? "Ollama URL" : "API Key"}
                   {selectedProviderHasKey && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600">Already configured</span>
                   )}
                 </Label>
                 <Input
                   id="api_key"
-                  type="password"
+                  type={selectedProvider?.name === "ollama" ? "text" : "password"}
                   value={formData.api_key}
                   onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-                  placeholder={selectedProviderHasKey ? "Enter new key to update" : "Enter your API key"}
+                  placeholder={selectedProvider?.name === "ollama" ? "ollama-local or http://localhost:11434/v1" : selectedProviderHasKey ? "Enter new key to update" : "Enter your API key"}
                   data-testid="input-api-key"
                   className="h-8 text-sm"
                 />
