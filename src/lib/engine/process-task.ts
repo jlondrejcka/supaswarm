@@ -384,13 +384,8 @@ export async function processTask(
     const vaultKeyName = getVaultKeyName(provider.name);
     let apiKey = "";
     
-    // Handle Ollama specially - use env var for base_url
-    if (provider.name === "ollama") {
-      const ollamaUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1";
-      console.log("[MAIN] Using Ollama local URL", { url: ollamaUrl });
-      // apiKey stays empty for Ollama
-    } else if (vaultKeyName) {
-      // Only fetch from vault if provider requires an API key
+    if (vaultKeyName) {
+      // Fetch from vault (all providers need this now, including Ollama base_url)
       const { data: secretValue, error: vaultError } = await supabase.rpc("get_vault_secret", {
         secret_name: vaultKeyName,
       });
@@ -398,7 +393,7 @@ export async function processTask(
       if (vaultError || !secretValue) {
         const result = await errorHandler.escalateToHumanReview({
           category: "validation",
-          error_message: `API key not found in vault: ${vaultKeyName}. Add the key to Supabase Vault.`,
+          error_message: `Secret not found in vault: ${vaultKeyName}. Add it to Supabase Vault.`,
           context: {
             task_id: taskId,
             agent_slug: agent.slug,
@@ -407,13 +402,14 @@ export async function processTask(
           options: ["abort"],
           priority: "critical",
         });
-        await logger.logError(`API key not found: ${vaultKeyName}`, { review_id: result.review_id });
-        return { success: false, error: `API key not found: ${vaultKeyName}` };
+        await logger.logError(`Secret not found: ${vaultKeyName}`, { review_id: result.review_id });
+        return { success: false, error: `Secret not found: ${vaultKeyName}` };
       }
       apiKey = secretValue;
+      console.log("[MAIN] Retrieved secret from vault", { provider: provider.name, secret_name: vaultKeyName });
     } else {
-      // Provider doesn't require API key
-      console.log("[MAIN] Provider does not require API key", { provider: provider.name });
+      // Provider doesn't require a secret
+      console.log("[MAIN] Provider does not require secret", { provider: provider.name });
     }
 
     // Build tool definitions
