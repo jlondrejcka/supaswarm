@@ -45,8 +45,8 @@ const REQUIRED_SECRETS = [
     helpUrl: "https://x.ai",
   },
   {
-    name: "OLLAMA_LOCAL",
-    label: "Ollama Local",
+    name: "OLLAMA_API_KEY",
+    label: "Ollama API Key",
     description: "Local Ollama instance (e.g., http://localhost:11434/v1)",
     helpUrl: null,
   },
