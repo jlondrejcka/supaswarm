@@ -380,26 +380,40 @@ export async function processTask(
       provider_name: provider.name,
     });
 
-    // Get API key
+    // Get API key (skip for providers that don't require one)
     const vaultKeyName = getVaultKeyName(provider.name);
-    const { data: apiKey, error: vaultError } = await supabase.rpc("get_vault_secret", {
-      secret_name: vaultKeyName,
-    });
-
-    if (vaultError || !apiKey) {
-      const result = await errorHandler.escalateToHumanReview({
-        category: "validation",
-        error_message: `API key not found in vault: ${vaultKeyName}. Add the key to Supabase Vault.`,
-        context: {
-          task_id: taskId,
-          agent_slug: agent.slug,
-          additional_context: { vault_key: vaultKeyName, provider: provider.name },
-        },
-        options: ["abort"],
-        priority: "critical",
+    let apiKey = "";
+    
+    // Handle Ollama specially - use env var for base_url
+    if (provider.name === "ollama") {
+      const ollamaUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1";
+      console.log("[MAIN] Using Ollama local URL", { url: ollamaUrl });
+      // apiKey stays empty for Ollama
+    } else if (vaultKeyName) {
+      // Only fetch from vault if provider requires an API key
+      const { data: secretValue, error: vaultError } = await supabase.rpc("get_vault_secret", {
+        secret_name: vaultKeyName,
       });
-      await logger.logError(`API key not found: ${vaultKeyName}`, { review_id: result.review_id });
-      return { success: false, error: `API key not found: ${vaultKeyName}` };
+
+      if (vaultError || !secretValue) {
+        const result = await errorHandler.escalateToHumanReview({
+          category: "validation",
+          error_message: `API key not found in vault: ${vaultKeyName}. Add the key to Supabase Vault.`,
+          context: {
+            task_id: taskId,
+            agent_slug: agent.slug,
+            additional_context: { vault_key: vaultKeyName, provider: provider.name },
+          },
+          options: ["abort"],
+          priority: "critical",
+        });
+        await logger.logError(`API key not found: ${vaultKeyName}`, { review_id: result.review_id });
+        return { success: false, error: `API key not found: ${vaultKeyName}` };
+      }
+      apiKey = secretValue;
+    } else {
+      // Provider doesn't require API key
+      console.log("[MAIN] Provider does not require API key", { provider: provider.name });
     }
 
     // Build tool definitions
