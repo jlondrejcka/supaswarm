@@ -44,6 +44,12 @@ const REQUIRED_SECRETS = [
     description: "For Grok models. Get it from x.ai",
     helpUrl: "https://x.ai",
   },
+  {
+    name: "OLLAMA_LOCAL",
+    label: "Ollama Local",
+    description: "Local Ollama instance (e.g., http://localhost:11434/v1)",
+    helpUrl: null,
+  },
 ]
 
 interface VaultSecret {
