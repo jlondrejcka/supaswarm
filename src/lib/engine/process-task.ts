@@ -115,7 +115,7 @@ function getAskSessionToolDefinition(): LLMToolDefinition {
 }
 
 /**
- * Helper to invoke child task (via fetch to process-task endpoint)
+ * Helper to invoke child task processing directly (local)
  */
 async function invokeChildTask(
   taskId: string,
@@ -123,14 +123,12 @@ async function invokeChildTask(
   serviceRoleKey: string,
 ): Promise<void> {
   try {
-    await fetch(`${supabaseUrl}/functions/v1/process-task`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ task_id: taskId }),
-    });
+    // Process child task directly (local execution, not remote edge function)
+    processTask(taskId, supabaseUrl, serviceRoleKey)
+      .then((result) => {
+        if (!result.success) console.error("[PROCESS_TASK] Child task failed:", result.error);
+      })
+      .catch((err) => console.error("[PROCESS_TASK] Child task error:", err));
   } catch (err) {
     console.error("[PROCESS_TASK] Failed to invoke child task:", err);
   }

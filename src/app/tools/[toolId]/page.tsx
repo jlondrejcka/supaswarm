@@ -152,7 +152,7 @@ export default function ToolDetailPage() {
     setVerifyResult(null)
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/verify-mcp`,
+        `/api/verify-mcp`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

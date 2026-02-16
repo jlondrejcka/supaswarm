@@ -397,7 +397,7 @@ export default function ChannelsPage() {
   }
 
   const webhookUrl = typeof window !== "undefined"
-    ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/slack-events`
+    ? `${window.location.origin}/api/slack-events`
     : ""
 
   const globalReady = hasSecret("SLACK_BOT_TOKEN") && hasSecret("SLACK_SIGNING_SECRET") && hasSecret("SLACK_APP_TOKEN")

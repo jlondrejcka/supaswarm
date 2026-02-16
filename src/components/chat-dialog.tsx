@@ -438,8 +438,8 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
         },
       ])
 
-      // Filter: Check task status before invoking edge function
-      // Only invoke if task is still pending (not already processed)
+      // Check task status before processing
+      // Only process if task is still pending (not already processed)
       const { data: taskCheck, error: checkError } = await supabase
         .from("tasks")
         .select("status")
@@ -467,7 +467,7 @@ export function ChatDialog({ open, onOpenChange }: ChatDialogProps) {
           console.error('Failed to process task:', processError)
         }
       } else {
-        console.log('Task already processed, skipping edge function invocation', {
+        console.log('Task already processed, skipping', {
           task_id: task.id,
           status: taskCheck?.status,
         })
