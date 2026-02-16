@@ -33,6 +33,7 @@ class Worker {
   private isRunning = false;
   private activeTasks = new Map<string, Promise<void>>();
   private maxConcurrency = 3;
+  private errorSuppressed = new Set<string>();
   private pollIntervals: Map<WorkerTask, number> = new Map([
     ["task_processing", 2000],
     ["context_graph_jobs", 5000],
@@ -123,7 +124,11 @@ class Worker {
       } as any);
 
       if (error) {
-        console.error(`[WORKER] Error reading from queue ${queueName}:`, error.message);
+        // Only log once per queue, not every poll cycle
+        if (!this.errorSuppressed.has(queueName)) {
+          console.warn(`[WORKER] Queue ${queueName} not available:`, error.message);
+          this.errorSuppressed.add(queueName);
+        }
         return;
       }
 
