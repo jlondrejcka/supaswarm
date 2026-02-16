@@ -631,29 +631,27 @@ export default function SettingsPage() {
               />
             </div>
 
-            {(selectedProvider?.requires_api_key || selectedProvider?.name === "ollama") && (
-              <div className="space-y-1">
-                <Label htmlFor="api_key" className="flex items-center gap-2 text-xs">
-                  <Shield className="h-3 w-3" />
-                  API Key
-                  {selectedProviderHasKey && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600">Already configured</span>
-                  )}
-                </Label>
-                <Input
-                  id="api_key"
-                  type="password"
-                  value={formData.api_key}
-                  onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-                  placeholder={selectedProvider?.name === "ollama" ? "ollama-local" : selectedProviderHasKey ? "Enter new key to update" : "Enter your API key"}
-                  data-testid="input-api-key"
-                  className="h-8 text-sm"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  Stored as <code className="bg-muted px-1 rounded">{envVarName}</code> in Vault
-                </p>
-              </div>
-            )}
+            <div className="space-y-1">
+              <Label htmlFor="api_key" className="flex items-center gap-2 text-xs">
+                <Shield className="h-3 w-3" />
+                API Key
+                {selectedProviderHasKey && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600">Already configured</span>
+                )}
+              </Label>
+              <Input
+                id="api_key"
+                type="password"
+                value={formData.api_key}
+                onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
+                placeholder={selectedProvider?.name === "ollama" ? "ollama-local" : selectedProviderHasKey ? "Enter new key to update" : "Enter your API key"}
+                data-testid="input-api-key"
+                className="h-8 text-sm"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Stored as <code className="bg-muted px-1 rounded">{envVarName}</code> in Vault
+              </p>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="button-cancel">
