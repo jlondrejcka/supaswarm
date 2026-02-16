@@ -397,16 +397,64 @@ LLM API keys are stored in Supabase Vault (not env vars) and configured via the 
 
 ---
 
-## Integration Patterns
+## API & Integration
 
-### Database Triggers → Background Agents
-Insert a row in any table, have a trigger create a task row, and an agent processes it automatically.
+### API Tokens
 
-### n8n → External System Triggers
-Use [n8n](https://n8n.io) to have external systems (webhooks, CRMs, email) create tasks via Supabase insert.
+SupaSwarm includes a full API token system for external integrations. Create tokens in the Settings page with granular permissions.
 
-### MCP Servers → Agent Tools
-Connect [n8n MCP servers](https://n8n.io/integrations/mcp-server-trigger/) to give agents access to 500+ integrations.
+```bash
+# Create a task via API
+curl -X POST https://your-app.com/api/tasks \
+  -H "Authorization: Bearer ss_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "...", "input": {"message": "Analyze competitor pricing"}}'
+
+# List tasks
+curl https://your-app.com/api/tasks?status=completed \
+  -H "Authorization: Bearer ss_live_..."
+
+# Trigger task processing
+curl -X POST https://your-app.com/api/process-task \
+  -H "Authorization: Bearer ss_live_..." \
+  -d '{"task_id": "..."}'
+```
+
+**Token features:**
+- `ss_live_` prefixed, bcrypt-hashed, never stored in plaintext
+- Granular CRUD permissions per resource (tasks, agents, tools, etc.)
+- Agent-scoped tokens — restrict which agents a token can interact with
+- Origin restrictions for CORS control
+- Expiration dates, rotation, and audit logging
+
+### Available API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/tasks` | List tasks (filter by status, agent, session) |
+| `GET` | `/api/tasks/:id` | Get task detail |
+| `POST` | `/api/process-task` | Trigger task processing |
+| `GET/POST` | `/api/agents` | List/create agents |
+| `GET/PUT` | `/api/agents/:id` | Get/update agent |
+| `GET/POST` | `/api/tools` | List/create tools |
+| `GET/POST` | `/api/skills` | List/create skills |
+| `GET/POST` | `/api/sessions` | List/create sessions |
+| `GET/POST` | `/api/jobs` | List/create scheduled jobs |
+| `POST` | `/api/jobs/:id/run` | Manually trigger a job |
+| `GET/POST` | `/api/approvals` | List/manage approval requests |
+| `GET` | `/api/dashboard/stats` | Dashboard statistics |
+| `POST` | `/api/auth/tokens` | Create new API token |
+
+### Integration Patterns
+
+**n8n / Zapier / Make → Agent Tasks**
+Use any automation platform to POST tasks via the API. A webhook receives an event, creates a task, and your agent processes it — no custom code.
+
+**Database Triggers → Background Agents**
+Insert a row in any table, have a Postgres trigger create a task row, and an agent processes it automatically.
+
+**MCP Servers → Agent Tools**
+Connect [n8n MCP servers](https://n8n.io/integrations/mcp-server-trigger/) to give agents access to 500+ integrations (Salesforce, Notion, email, etc.).
 
 ---
 
